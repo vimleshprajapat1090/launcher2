@@ -2,7 +2,7 @@
 
 package com.iphone.launcher
 
-import android.content.ApplicationInfo
+import android.content.pm.ApplicationInfo
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -486,4 +486,93 @@ fun FolderOverlay(
                 modifier = Modifier.heightIn(max = 420.dp)
             ) {
                 items(apps) { app ->
-                    Box(Modifier.pa
+                        Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
+                        AppIcon(app = app, onClick = { onLaunch(app) }, onLongClick = { onLong(app) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MenuItem(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        color = Color(0xFF0A84FF),
+        fontSize = 16.sp,
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 12.dp)
+    )
+}
+
+@Composable
+fun AppActionDialog(
+    app: AppItem,
+    inDock: Boolean,
+    inFolder: Boolean,
+    folderNames: List<String>,
+    onDock: () -> Unit,
+    onAddToFolder: (String) -> Unit,
+    onRemoveFromFolder: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var step by remember { mutableStateOf(0) }
+    var newName by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(24.dp))
+                .background(Color(0xF22C2C2E))
+                .padding(20.dp)
+        ) {
+            Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Spacer(Modifier.height(8.dp))
+            if (step == 0) {
+                MenuItem(if (inDock) "Dock se hatao" else "Dock me daalo", onDock)
+                MenuItem("Folder me daalo") { step = 1 }
+                if (inFolder) MenuItem("Folder se bahar nikalo", onRemoveFromFolder)
+            } else {
+                folderNames.forEach { n -> MenuItem(n) { onAddToFolder(n) } }
+                TextField(
+                    value = newName,
+                    onValueChange = { v -> newName = v.filter { ch -> ch != ':' && ch != ';' && ch != ',' } },
+                    placeholder = { Text("Naya folder ka naam") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                MenuItem("Naya folder banao") {
+                    if (newName.isNotBlank()) onAddToFolder(newName.trim())
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchOverlay(apps: List<AppItem>, cols: Int, onClose: () -> Unit, onLaunch: (AppItem) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    BackHandler(enabled = true) { onClose() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    val results = if (query.isBlank()) apps else apps.filter { it.label.contains(query, ignoreCase = true) }
+
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.65f)).imePadding()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
+            TextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search apps") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().focusRequester(focus)
+            )
+            Spacer(Modifier.height(16.dp))
+            LazyVerticalGrid(columns = GridCells.Fixed(cols), modifier = Modifier.fillMaxSize()) {
+                items(results) { app ->
+                    Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
+                        AppIcon(app = app, onClick = { onLaunch(app) })
+                    }
+                }
+            }
+        }
+    }
+}
