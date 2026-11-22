@@ -1,6 +1,10 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.iphone.launcher
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -33,7 +38,7 @@ fun WidgetCard(modifier: Modifier, content: @Composable () -> Unit) {
 }
 
 @Composable
-fun ClockWidgets() {
+fun ClockWidgets(onLongPress: () -> Unit) {
     val now by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
             delay(10_000)
@@ -49,7 +54,14 @@ fun ClockWidgets() {
     val month = SimpleDateFormat("MMMM", loc).format(date)
 
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 4.dp)
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+                onLongClick = onLongPress
+            ),
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         WidgetCard(Modifier.weight(1f).height(160.dp)) {

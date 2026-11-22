@@ -5,6 +5,7 @@ import android.content.Intent
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -61,6 +62,37 @@ fun expandNotifications(context: Context) {
     }
 }
 
+fun readBrightness(context: Context): Float {
+    return try {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+    } catch (e: Exception) {
+        0.5f
+    }
+}
+
+fun setBrightness(context: Context, v: Float) {
+    try {
+        val cr = context.contentResolver
+        Settings.System.putInt(
+            cr,
+            Settings.System.SCREEN_BRIGHTNESS_MODE,
+            Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+        )
+        Settings.System.putInt(cr, Settings.System.SCREEN_BRIGHTNESS, (v * 255f).toInt().coerceIn(1, 255))
+    } catch (e: Exception) {
+    }
+}
+
+fun openWriteSettings(context: Context) {
+    try {
+        context.startActivity(
+            Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + context.packageName))
+        )
+    } catch (e: Exception) {
+        Toast.makeText(context, "Settings nahi khuli", Toast.LENGTH_SHORT).show()
+    }
+}
+
 @Composable
 fun CCCircle(label: String, on: Boolean, onClick: () -> Unit) {
     Box(
@@ -89,6 +121,8 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
     val audio = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val maxVol = remember { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat() }
     var volume by remember { mutableStateOf(audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()) }
+    var bright by remember { mutableStateOf(readBrightness(context).coerceIn(0.05f, 1f)) }
+    var asked by remember { mutableStateOf(false) }
     var torch by remember { mutableStateOf(false) }
     val info = media.info
 
@@ -195,6 +229,34 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                             )
                         )
                     }
+                }
+            }
+            CCCard(Modifier.fillMaxWidth().height(90.dp)) {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("Brightness", color = Color.White, fontSize = 12.sp)
+                    Slider(
+                        value = bright,
+                        onValueChange = { v ->
+                            if (Settings.System.canWrite(context)) {
+                                bright = v
+                                setBrightness(context, v)
+                            } else if (!asked) {
+                                asked = true
+                                openWriteSettings(context)
+                            } else {
+                                bright = bright
+                            }
+                        },
+                        valueRange = 0.05f..1f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color.White,
+                            inactiveTrackColor = Color(0x55FFFFFF)
+                        )
+                    )
                 }
             }
         }

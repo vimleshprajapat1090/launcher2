@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -20,9 +21,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -44,11 +47,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+// Icon ki roundness yahan se badlo: bada number = zyada gol
+val IconShape = RoundedCornerShape(percent = 28)
 
 val labelStyle = TextStyle(
     color = Color.White,
@@ -80,7 +87,7 @@ fun iosKind(pkg: String): Int {
 
 @Composable
 fun IosIcon(kind: Int, modifier: Modifier) {
-    Canvas(modifier.clip(RoundedCornerShape(percent = 22))) {
+    Canvas(modifier.clip(IconShape)) {
         val w = size.width
         val h = size.height
         val c = Offset(w / 2f, h / 2f)
@@ -184,7 +191,7 @@ fun IconImage(app: AppItem, modifier: Modifier) {
     if (kind != 0) {
         IosIcon(kind, modifier)
     } else if (app.opaque) {
-        Box(modifier.clip(RoundedCornerShape(percent = 22))) {
+        Box(modifier.clip(IconShape)) {
             Image(
                 bitmap = app.icon,
                 contentDescription = app.label,
@@ -194,7 +201,7 @@ fun IconImage(app: AppItem, modifier: Modifier) {
         }
     } else {
         Box(
-            modifier.clip(RoundedCornerShape(percent = 22))
+            modifier.clip(IconShape)
                 .background(Color(0xFFF2F2F7))
                 .padding(6.dp)
         ) {
@@ -210,7 +217,10 @@ fun AppIcon(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     size: Dp = 60.dp,
-    showLabel: Boolean = true
+    showLabel: Boolean = true,
+    editing: Boolean = false,
+    wiggle: State<Float>? = null,
+    onRemove: () -> Unit = {}
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -221,33 +231,47 @@ fun AppIcon(
     )
     val boundsHolder = remember { arrayOfNulls<Rect>(1) }
 
-    Column(
-        modifier = Modifier
-            .graphicsLayer(scaleX = scale, scaleY = scale)
-            .onGloballyPositioned { boundsHolder[0] = it.boundsInWindow() }
-            .combinedClickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = {
-                    val b = boundsHolder[0]
-                    if (b != null) {
-                        LaunchAnchor.x = b.left.toInt()
-                        LaunchAnchor.y = b.top.toInt()
-                        LaunchAnchor.w = b.width.toInt()
-                        LaunchAnchor.h = b.height.toInt()
-                        LaunchAnchor.valid = true
-                    }
-                    onClick()
-                },
-                onLongClick = onLongClick
-            )
-            .padding(horizontal = 2.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        IconImage(app, Modifier.size(size))
-        if (showLabel) {
-            Spacer(Modifier.height(4.dp))
-            Text(app.label, style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Box(Modifier.graphicsLayer { rotationZ = wiggle?.value ?: 0f }) {
+        Column(
+            modifier = Modifier
+                .graphicsLayer(scaleX = scale, scaleY = scale)
+                .onGloballyPositioned { boundsHolder[0] = it.boundsInWindow() }
+                .combinedClickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = {
+                        val b = boundsHolder[0]
+                        if (b != null) {
+                            LaunchAnchor.x = b.left.toInt()
+                            LaunchAnchor.y = b.top.toInt()
+                            LaunchAnchor.w = b.width.toInt()
+                            LaunchAnchor.h = b.height.toInt()
+                            LaunchAnchor.valid = true
+                        }
+                        onClick()
+                    },
+                    onLongClick = onLongClick
+                )
+                .padding(horizontal = 2.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            IconImage(app, Modifier.size(size))
+            if (showLabel) {
+                Spacer(Modifier.height(4.dp))
+                Text(app.label, style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (editing) {
+            Box(
+                Modifier.align(Alignment.TopStart)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFF3B30))
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("-", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -263,7 +287,7 @@ fun FolderIcon(name: String, apps: List<AppItem>, onClick: () -> Unit, size: Dp 
     ) {
         Box(
             Modifier.size(size)
-                .clip(RoundedCornerShape(percent = 22))
+                .clip(IconShape)
                 .background(Color.White.copy(alpha = 0.3f))
                 .padding(size * 0.08f)
         ) {

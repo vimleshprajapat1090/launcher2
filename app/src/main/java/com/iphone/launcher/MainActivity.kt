@@ -12,13 +12,25 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +52,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -48,11 +61,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -193,13 +211,33 @@ fun serializeFolders(f: List<Pair<String, List<String>>>): String =
     f.joinToString(";") { it.first + ":" + it.second.joinToString(",") }
 
 @Composable
+fun wiggleState(active: Boolean): State<Float> {
+    val zero = remember { mutableStateOf(0f) }
+    if (!active) return zero
+    val transition = rememberInfiniteTransition(label = "wiggle")
+    val anim = transition.animateFloat(
+        initialValue = -2f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 110, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wiggleAngle"
+    )
+    return anim
+}
+
+@Composable
 fun IconGrid(
     items: List<HomeItem>,
     rowCount: Int,
     cols: Int,
     iconSize: Dp,
+    editing: Boolean,
+    wiggle: State<Float>,
     onLaunch: (AppItem) -> Unit,
     onLong: (AppItem) -> Unit,
+    onRemove: (AppItem) -> Unit,
     onFolder: (String, List<AppItem>) -> Unit
 ) {
     Column(Modifier.fillMaxWidth()) {
@@ -215,14 +253,17 @@ fun IconGrid(
                                 is HomeItem.AppEntry -> AppIcon(
                                     app = item.app,
                                     size = iconSize,
-                                    onClick = { onLaunch(item.app) },
-                                    onLongClick = { onLong(item.app) }
+                                    editing = editing,
+                                    wiggle = if (editing) wiggle else null,
+                                    onRemove = { onRemove(item.app) },
+                                    onClick = { if (!editing) onLaunch(item.app) },
+                                    onLongClick = { if (!editing) onLong(item.app) }
                                 )
                                 is HomeItem.FolderEntry -> FolderIcon(
                                     name = item.name,
                                     apps = item.apps,
                                     size = iconSize,
-                                    onClick = { onFolder(item.name, item.apps) }
+                                    onClick = { if (!editing) onFolder(item.name, item.apps) }
                                 )
                             }
                         }
@@ -259,8 +300,28 @@ fun LauncherScreen(
     var folders by remember { mutableStateOf(parseFolders(prefs.getString("folders", "")!!)) }
     var searching by remember { mutableStateOf(false) }
     var showControl by remember { mutableStateOf(false) }
+    var showHomeMenu by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    var wallVersion by remember { mutableStateOf(0) }
+    var dockPos by remember { mutableStateOf(Offset.Zero) }
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var openGroup by remember { mutableStateOf<Pair<String, List<AppItem>>?>(null) }
+
+    val wiggle = wiggleState(editing)
+
+    val wallpaper by produceState<WallpaperImages?>(initialValue = null, wallVersion) {
+        value = withContext(Dispatchers.IO) { loadWallpaper(context) }
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            if (saveWallpaper(context, uri)) {
+                wallVersion += 1
+            } else {
+                Toast.makeText(context, "Wallpaper nahi lag paya", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     val visible = apps.filter { it.pkg !in hidden }
     val hiddenApps = apps.filter { it.pkg in hidden }
@@ -345,6 +406,8 @@ fun LauncherScreen(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
+        val screenW = constraints.maxWidth.toFloat()
+        val screenH = constraints.maxHeight.toFloat()
         val isTablet = maxWidth > 600.dp
         val cols = if (isTablet) 6 else 4
         val iconSize = if (isTablet) 66.dp else 60.dp
@@ -355,15 +418,30 @@ fun LauncherScreen(
             listOf(items.take(firstCount)) + items.drop(firstCount).chunked(cols * rows)
         val pagerState = rememberPagerState(pageCount = { pages.size + 1 })
 
+        wallpaper?.let { w ->
+            Image(
+                bitmap = w.full,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
         Column(
             Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 44.dp)
         ) {
             HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
                 if (page < pages.size) {
-                    Column(Modifier.fillMaxSize().padding(top = 8.dp, start = 12.dp, end = 12.dp)) {
+                    Column(
+                        Modifier.fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures(onDoubleTap = { lockScreen(context) })
+                            }
+                            .padding(top = 8.dp, start = 12.dp, end = 12.dp)
+                    ) {
                         if (page == 0) {
                             Box(Modifier.fillMaxWidth().height(170.dp)) {
-                                ClockWidgets()
+                                ClockWidgets(onLongPress = { showHomeMenu = true })
                             }
                         }
                         IconGrid(
@@ -371,15 +449,17 @@ fun LauncherScreen(
                             rowCount = if (page == 0) firstRows else rows,
                             cols = cols,
                             iconSize = iconSize,
+                            editing = editing,
+                            wiggle = wiggle,
                             onLaunch = launch,
                             onLong = { app -> menuApp = app },
+                            onRemove = { app -> toggleHome(app.pkg) },
                             onFolder = { name, list -> openGroup = name to list }
                         )
                     }
                 } else {
                     LibraryPage(
                         apps = visible,
-                        hidden = hiddenApps,
                         onSearch = { searching = true },
                         onOpen = { name, list -> openGroup = name to list }
                     )
@@ -397,20 +477,41 @@ fun LauncherScreen(
             }
 
             Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
-                Box(
-                    Modifier.clip(RoundedCornerShape(20.dp))
-                        .background(Color.White.copy(alpha = 0.25f))
-                        .clickable { searching = true }
-                        .padding(horizontal = 28.dp, vertical = 8.dp)
-                ) {
-                    Text("Search", color = Color.White, fontSize = 13.sp)
+                if (editing) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFF0A84FF))
+                            .clickable { editing = false }
+                            .padding(horizontal = 32.dp, vertical = 8.dp)
+                    ) {
+                        Text("Done", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(20.dp))
+                            .background(Color.White.copy(alpha = 0.25f))
+                            .combinedClickable(
+                                onClick = { searching = true },
+                                onLongClick = { showHomeMenu = true }
+                            )
+                            .padding(horizontal = 28.dp, vertical = 8.dp)
+                    ) {
+                        Text("Search", color = Color.White, fontSize = 13.sp)
+                    }
                 }
             }
 
             Box(Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
                 Row(
                     Modifier.clip(RoundedCornerShape(32.dp))
-                        .background(Color.White.copy(alpha = 0.22f))
+                        .onGloballyPositioned { dockPos = it.positionInWindow() }
+                        .frosted(
+                            wallpaper?.blurred,
+                            screenW,
+                            screenH,
+                            dockPos,
+                            Color.White.copy(alpha = if (wallpaper != null) 0.14f else 0.22f)
+                        )
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -420,8 +521,8 @@ fun LauncherScreen(
                             app = app,
                             size = iconSize,
                             showLabel = false,
-                            onClick = { launch(app) },
-                            onLongClick = { menuApp = app }
+                            onClick = { if (!editing) launch(app) },
+                            onLongClick = { if (!editing) menuApp = app }
                         )
                     }
                 }
@@ -476,6 +577,40 @@ fun LauncherScreen(
                     launch(app)
                 },
                 onLong = { app -> menuApp = app }
+            )
+        }
+
+        if (showHomeMenu) {
+            HomeMenuDialog(
+                hasHidden = hiddenApps.isNotEmpty(),
+                hasWallpaper = wallpaper != null,
+                lockReady = isLockReady(context),
+                onWallpaper = {
+                    showHomeMenu = false
+                    picker.launch("image/*")
+                },
+                onResetWallpaper = {
+                    deleteWallpaper(context)
+                    wallVersion += 1
+                    showHomeMenu = false
+                },
+                onEdit = {
+                    editing = true
+                    showHomeMenu = false
+                },
+                onHidden = {
+                    openGroup = "Hidden" to hiddenApps
+                    showHomeMenu = false
+                },
+                onLockSetup = {
+                    showHomeMenu = false
+                    if (isLockReady(context)) {
+                        Toast.makeText(context, "Double-tap lock pehle se chalu hai", Toast.LENGTH_SHORT).show()
+                    } else {
+                        requestLockAdmin(context)
+                    }
+                },
+                onDismiss = { showHomeMenu = false }
             )
         }
 

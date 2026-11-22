@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,7 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -48,7 +48,6 @@ import androidx.compose.ui.window.Dialog
 @Composable
 fun LibraryPage(
     apps: List<AppItem>,
-    hidden: List<AppItem>,
     onSearch: () -> Unit,
     onOpen: (String, List<AppItem>) -> Unit
 ) {
@@ -56,7 +55,6 @@ fun LibraryPage(
         val list = apps.filter { it.category == cat }
         if (list.isEmpty()) null else cat to list
     }
-    val all = if (hidden.isEmpty()) groups else groups + ("Hidden" to hidden)
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         Box(
@@ -73,7 +71,7 @@ fun LibraryPage(
             columns = GridCells.Adaptive(minSize = 170.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(all) { group ->
+            items(groups) { group ->
                 val name = group.first
                 val list = group.second
                 Column(
@@ -165,6 +163,38 @@ fun MenuItem(text: String, onClick: () -> Unit) {
         fontSize = 16.sp,
         modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 12.dp)
     )
+}
+
+@Composable
+fun HomeMenuDialog(
+    hasHidden: Boolean,
+    hasWallpaper: Boolean,
+    lockReady: Boolean,
+    onWallpaper: () -> Unit,
+    onResetWallpaper: () -> Unit,
+    onEdit: () -> Unit,
+    onHidden: () -> Unit,
+    onLockSetup: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(24.dp))
+                .background(Color(0xF22C2C2E))
+                .padding(20.dp)
+        ) {
+            Text("Home Screen", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Spacer(Modifier.height(8.dp))
+            MenuItem("Wallpaper chuno (gallery se)", onWallpaper)
+            if (hasWallpaper) MenuItem("Default wallpaper pe wapas", onResetWallpaper)
+            MenuItem("Icons edit karo (hilne wale)", onEdit)
+            if (hasHidden) MenuItem("Hidden apps dekho", onHidden)
+            MenuItem(
+                if (lockReady) "Double-tap lock: chalu hai" else "Double-tap lock chalu karo",
+                onLockSetup
+            )
+        }
+    }
 }
 
 @Composable
