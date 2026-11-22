@@ -1,10 +1,15 @@
 package com.iphone.launcher
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +23,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -32,6 +39,10 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -45,6 +56,14 @@ val labelStyle = TextStyle(
     textAlign = TextAlign.Center,
     shadow = Shadow(Color.Black.copy(alpha = 0.5f), Offset(0f, 1f), 3f)
 )
+
+object LaunchAnchor {
+    var x = 0
+    var y = 0
+    var w = 0
+    var h = 0
+    var valid = false
+}
 
 fun iosKind(pkg: String): Int {
     val p = pkg.lowercase()
@@ -164,8 +183,21 @@ fun IconImage(app: AppItem, modifier: Modifier) {
     val kind = remember(app.pkg) { iosKind(app.pkg) }
     if (kind != 0) {
         IosIcon(kind, modifier)
+    } else if (app.opaque) {
+        Box(modifier.clip(RoundedCornerShape(percent = 22))) {
+            Image(
+                bitmap = app.icon,
+                contentDescription = app.label,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     } else {
-        Box(modifier.clip(RoundedCornerShape(percent = 22)).background(Color(0xFFF2F2F7))) {
+        Box(
+            modifier.clip(RoundedCornerShape(percent = 22))
+                .background(Color(0xFFF2F2F7))
+                .padding(6.dp)
+        ) {
             Image(bitmap = app.icon, contentDescription = app.label, modifier = Modifier.fillMaxSize())
         }
     }
@@ -180,9 +212,35 @@ fun AppIcon(
     size: Dp = 60.dp,
     showLabel: Boolean = true
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.86f else 1f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
+        label = "press"
+    )
+    val boundsHolder = remember { arrayOfNulls<Rect>(1) }
+
     Column(
         modifier = Modifier
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .onGloballyPositioned { boundsHolder[0] = it.boundsInWindow() }
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = {
+                    val b = boundsHolder[0]
+                    if (b != null) {
+                        LaunchAnchor.x = b.left.toInt()
+                        LaunchAnchor.y = b.top.toInt()
+                        LaunchAnchor.w = b.width.toInt()
+                        LaunchAnchor.h = b.height.toInt()
+                        LaunchAnchor.valid = true
+                    }
+                    onClick()
+                },
+                onLongClick = onLongClick
+            )
             .padding(horizontal = 2.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

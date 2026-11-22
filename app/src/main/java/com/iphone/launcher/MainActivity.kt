@@ -2,48 +2,44 @@
 
 package com.iphone.launcher
 
-import android.content.pm.ApplicationInfo
+import android.app.Activity
+import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -52,17 +48,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
@@ -73,7 +66,8 @@ data class AppItem(
     val label: String,
     val pkg: String,
     val icon: ImageBitmap,
-    val category: String
+    val category: String,
+    val opaque: Boolean
 )
 
 sealed interface HomeItem {
@@ -148,17 +142,38 @@ fun categoryOf(pm: PackageManager, pkg: String): String {
     }
 }
 
+fun renderIcon(d: Drawable): Pair<Bitmap, Boolean> {
+    if (d is AdaptiveIconDrawable) {
+        val bmp = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val bg = d.background
+        if (bg != null) {
+            bg.setBounds(-40, -40, 200, 200)
+            bg.draw(canvas)
+        }
+        val fg = d.foreground
+        if (fg != null) {
+            fg.setBounds(-40, -40, 200, 200)
+            fg.draw(canvas)
+        }
+        return Pair(bmp, true)
+    }
+    return Pair(d.toBitmap(160, 160), false)
+}
+
 fun loadApps(context: Context): List<AppItem> {
     val pm = context.packageManager
     val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     return pm.queryIntentActivities(intent, 0)
         .filter { it.activityInfo.packageName != context.packageName }
         .map {
+            val rendered = renderIcon(it.loadIcon(pm))
             AppItem(
                 label = it.loadLabel(pm).toString(),
                 pkg = it.activityInfo.packageName,
-                icon = it.loadIcon(pm).toBitmap(160, 160).asImageBitmap(),
-                category = categoryOf(pm, it.activityInfo.packageName)
+                icon = rendered.first.asImageBitmap(),
+                category = categoryOf(pm, it.activityInfo.packageName),
+                opaque = rendered.second
             )
         }
         .distinctBy { it.pkg }
@@ -178,6 +193,47 @@ fun serializeFolders(f: List<Pair<String, List<String>>>): String =
     f.joinToString(";") { it.first + ":" + it.second.joinToString(",") }
 
 @Composable
+fun IconGrid(
+    items: List<HomeItem>,
+    rowCount: Int,
+    cols: Int,
+    iconSize: Dp,
+    onLaunch: (AppItem) -> Unit,
+    onLong: (AppItem) -> Unit,
+    onFolder: (String, List<AppItem>) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        for (r in 0 until rowCount) {
+            Row(Modifier.fillMaxWidth().height(100.dp)) {
+                for (c in 0 until cols) {
+                    Box(
+                        Modifier.weight(1f).fillMaxHeight(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        items.getOrNull(r * cols + c)?.let { item ->
+                            when (item) {
+                                is HomeItem.AppEntry -> AppIcon(
+                                    app = item.app,
+                                    size = iconSize,
+                                    onClick = { onLaunch(item.app) },
+                                    onLongClick = { onLong(item.app) }
+                                )
+                                is HomeItem.FolderEntry -> FolderIcon(
+                                    name = item.name,
+                                    apps = item.apps,
+                                    size = iconSize,
+                                    onClick = { onFolder(item.name, item.apps) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun LauncherScreen(
     media: MediaWatcher,
     hasAccess: Boolean,
@@ -190,25 +246,56 @@ fun LauncherScreen(
         value = withContext(Dispatchers.Default) { loadApps(context) }
     }
 
-    var dockPkgs by remember {
-        mutableStateOf(prefs.getString("dock", "")!!.split(",").filter { it.isNotBlank() })
+    fun readList(key: String): List<String> =
+        prefs.getString(key, "")!!.split(",").filter { it.isNotBlank() }
+
+    fun saveList(key: String, list: List<String>) {
+        prefs.edit().putString(key, list.joinToString(",")).apply()
     }
+
+    var dockPkgs by remember { mutableStateOf(readList("dock")) }
+    var noHome by remember { mutableStateOf(readList("nohome")) }
+    var hidden by remember { mutableStateOf(readList("hidden")) }
     var folders by remember { mutableStateOf(parseFolders(prefs.getString("folders", "")!!)) }
     var searching by remember { mutableStateOf(false) }
+    var showControl by remember { mutableStateOf(false) }
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var openGroup by remember { mutableStateOf<Pair<String, List<AppItem>>?>(null) }
 
-    val dock = dockPkgs.mapNotNull { p -> apps.firstOrNull { it.pkg == p } }
-        .ifEmpty { apps.take(4) }
+    val visible = apps.filter { it.pkg !in hidden }
+    val hiddenApps = apps.filter { it.pkg in hidden }
+    val dock = dockPkgs.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }
+        .ifEmpty { visible.take(4) }
     val folderPkgs = folders.flatMap { it.second }.toSet()
-    val homeApps = apps.filter { a -> dock.none { it.pkg == a.pkg } && a.pkg !in folderPkgs }
+    val homeApps = visible.filter { a ->
+        dock.none { it.pkg == a.pkg } && a.pkg !in folderPkgs && a.pkg !in noHome
+    }
     val folderEntries = folders
-        .map { f -> HomeItem.FolderEntry(f.first, f.second.mapNotNull { p -> apps.firstOrNull { it.pkg == p } }) }
+        .map { f -> HomeItem.FolderEntry(f.first, f.second.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }) }
         .filter { it.apps.isNotEmpty() }
     val items: List<HomeItem> = folderEntries + homeApps.map { HomeItem.AppEntry(it) }
 
     val launch: (AppItem) -> Unit = { app ->
-        context.packageManager.getLaunchIntentForPackage(app.pkg)?.let { context.startActivity(it) }
+        val li = context.packageManager.getLaunchIntentForPackage(app.pkg)
+        if (li != null) {
+            val opts = try {
+                val act = context as Activity
+                if (LaunchAnchor.valid) {
+                    ActivityOptions.makeScaleUpAnimation(
+                        act.window.decorView,
+                        LaunchAnchor.x,
+                        LaunchAnchor.y,
+                        LaunchAnchor.w,
+                        LaunchAnchor.h
+                    ).toBundle()
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                null
+            }
+            context.startActivity(li, opts)
+        }
     }
 
     val toggleDock: (AppItem) -> Unit = { app ->
@@ -222,7 +309,19 @@ fun LauncherScreen(
             }
         }
         dockPkgs = updated
-        prefs.edit().putString("dock", updated.joinToString(",")).apply()
+        saveList("dock", updated)
+    }
+
+    fun toggleHome(pkg: String) {
+        val u = if (pkg in noHome) noHome - pkg else noHome + pkg
+        noHome = u
+        saveList("nohome", u)
+    }
+
+    fun toggleHidden(pkg: String) {
+        val u = if (pkg in hidden) hidden - pkg else hidden + pkg
+        hidden = u
+        saveList("hidden", u)
     }
 
     fun saveFolders(newList: List<Pair<String, List<String>>>) {
@@ -250,8 +349,10 @@ fun LauncherScreen(
         val cols = if (isTablet) 6 else 4
         val iconSize = if (isTablet) 66.dp else 60.dp
         val rows = ((maxHeight.value - 310f) / 100f).toInt().coerceIn(2, 8)
-        val perPage = cols * rows
-        val pages = items.chunked(perPage).ifEmpty { listOf(emptyList()) }
+        val firstRows = (rows - 2).coerceAtLeast(0)
+        val firstCount = cols * firstRows
+        val pages: List<List<HomeItem>> =
+            listOf(items.take(firstCount)) + items.drop(firstCount).chunked(cols * rows)
         val pagerState = rememberPagerState(pageCount = { pages.size + 1 })
 
         Column(
@@ -259,37 +360,29 @@ fun LauncherScreen(
         ) {
             HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
                 if (page < pages.size) {
-                    Column(Modifier.fillMaxSize().padding(top = 12.dp, start = 12.dp, end = 12.dp)) {
-                        for (r in 0 until rows) {
-                            Row(Modifier.fillMaxWidth().height(100.dp)) {
-                                for (c in 0 until cols) {
-                                    Box(
-                                        Modifier.weight(1f).fillMaxHeight(),
-                                        contentAlignment = Alignment.TopCenter
-                                    ) {
-                                        pages[page].getOrNull(r * cols + c)?.let { item ->
-                                            when (item) {
-                                                is HomeItem.AppEntry -> AppIcon(
-                                                    app = item.app,
-                                                    size = iconSize,
-                                                    onClick = { launch(item.app) },
-                                                    onLongClick = { menuApp = item.app }
-                                                )
-                                                is HomeItem.FolderEntry -> FolderIcon(
-                                                    name = item.name,
-                                                    apps = item.apps,
-                                                    size = iconSize,
-                                                    onClick = { openGroup = item.name to item.apps }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                    Column(Modifier.fillMaxSize().padding(top = 8.dp, start = 12.dp, end = 12.dp)) {
+                        if (page == 0) {
+                            Box(Modifier.fillMaxWidth().height(170.dp)) {
+                                ClockWidgets()
                             }
                         }
+                        IconGrid(
+                            items = pages[page],
+                            rowCount = if (page == 0) firstRows else rows,
+                            cols = cols,
+                            iconSize = iconSize,
+                            onLaunch = launch,
+                            onLong = { app -> menuApp = app },
+                            onFolder = { name, list -> openGroup = name to list }
+                        )
                     }
                 } else {
-                    LibraryPage(apps = apps, cols = cols, onOpen = { name, list -> openGroup = name to list })
+                    LibraryPage(
+                        apps = visible,
+                        hidden = hiddenApps,
+                        onSearch = { searching = true },
+                        onOpen = { name, list -> openGroup = name to list }
+                    )
                 }
             }
 
@@ -314,31 +407,55 @@ fun LauncherScreen(
                 }
             }
 
-            Row(
-                Modifier.fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .heightIn(min = 84.dp)
-                    .clip(RoundedCornerShape(32.dp))
-                    .background(Color.White.copy(alpha = 0.28f))
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                dock.forEach { app ->
-                    AppIcon(
-                        app = app,
-                        size = iconSize,
-                        showLabel = false,
-                        onClick = { launch(app) },
-                        onLongClick = { menuApp = app }
-                    )
+            Box(Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
+                Row(
+                    Modifier.clip(RoundedCornerShape(32.dp))
+                        .background(Color.White.copy(alpha = 0.22f))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    dock.forEach { app ->
+                        AppIcon(
+                            app = app,
+                            size = iconSize,
+                            showLabel = false,
+                            onClick = { launch(app) },
+                            onLongClick = { menuApp = app }
+                        )
+                    }
                 }
             }
         }
 
+        Box(
+            Modifier.align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 2.dp)
+                .width(150.dp)
+                .height(46.dp)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures { _, dragAmount ->
+                        if (dragAmount > 6f) showControl = true
+                    }
+                }
+        )
+        Box(
+            Modifier.align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(top = 2.dp)
+                .width(150.dp)
+                .height(46.dp)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures { _, dragAmount ->
+                        if (dragAmount > 6f) expandNotifications(context)
+                    }
+                }
+        )
+
         if (searching) {
             SearchOverlay(
-                apps = apps,
+                apps = visible,
                 cols = cols,
                 onClose = { searching = false },
                 onLaunch = { app ->
@@ -367,6 +484,8 @@ fun LauncherScreen(
                 app = app,
                 inDock = dock.any { it.pkg == app.pkg },
                 inFolder = app.pkg in folderPkgs,
+                inNoHome = app.pkg in noHome,
+                isHidden = app.pkg in hidden,
                 folderNames = folders.map { it.first },
                 onDock = {
                     toggleDock(app)
@@ -382,8 +501,21 @@ fun LauncherScreen(
                     menuApp = null
                     openGroup = null
                 },
+                onToggleHome = {
+                    toggleHome(app.pkg)
+                    menuApp = null
+                },
+                onToggleHidden = {
+                    toggleHidden(app.pkg)
+                    menuApp = null
+                    openGroup = null
+                },
                 onDismiss = { menuApp = null }
             )
+        }
+
+        if (showControl) {
+            ControlCenter(media = media, onClose = { showControl = false })
         }
 
         Box(
@@ -391,188 +523,6 @@ fun LauncherScreen(
             contentAlignment = Alignment.TopCenter
         ) {
             DynamicIsland(media = media, call = call, hasAccess = hasAccess, onNeedAccess = onNeedAccess)
-        }
-    }
-}
-
-@Composable
-fun LibraryPage(apps: List<AppItem>, cols: Int, onOpen: (String, List<AppItem>) -> Unit) {
-    val groups = LIBRARY_ORDER.mapNotNull { cat ->
-        val list = apps.filter { it.category == cat }
-        if (list.isEmpty()) null else cat to list
-    }
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Text(
-            "App Library",
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(12.dp)
-        )
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(if (cols > 4) 3 else 2),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(groups) { group ->
-                val name = group.first
-                val list = group.second
-                Column(Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                        Modifier.fillMaxWidth()
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(Color.White.copy(alpha = 0.22f))
-                            .clickable { onOpen(name, list) }
-                            .padding(12.dp)
-                    ) {
-                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
-                            for (r in 0 until 2) {
-                                Row(
-                                    Modifier.fillMaxWidth().weight(1f),
-                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    for (c in 0 until 2) {
-                                        val a = list.getOrNull(r * 2 + c)
-                                        Box(Modifier.weight(1f).aspectRatio(1f).padding(3.dp)) {
-                                            if (a != null) IconImage(a, Modifier.fillMaxSize())
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Text(name, style = labelStyle, modifier = Modifier.padding(top = 6.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun FolderOverlay(
-    title: String,
-    apps: List<AppItem>,
-    cols: Int,
-    onClose: () -> Unit,
-    onLaunch: (AppItem) -> Unit,
-    onLong: (AppItem) -> Unit
-) {
-    BackHandler(enabled = true) { onClose() }
-    Box(
-        Modifier.fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() },
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            Modifier.padding(24.dp)
-                .widthIn(max = 480.dp)
-                .clip(RoundedCornerShape(32.dp))
-                .background(Color(0xCC3A3A3C))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
-                .padding(16.dp)
-        ) {
-            Text(
-                title,
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
-            )
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(if (cols > 4) 4 else cols),
-                modifier = Modifier.heightIn(max = 420.dp)
-            ) {
-                items(apps) { app ->
-                        Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
-                        AppIcon(app = app, onClick = { onLaunch(app) }, onLongClick = { onLong(app) })
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MenuItem(text: String, onClick: () -> Unit) {
-    Text(
-        text,
-        color = Color(0xFF0A84FF),
-        fontSize = 16.sp,
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 12.dp)
-    )
-}
-
-@Composable
-fun AppActionDialog(
-    app: AppItem,
-    inDock: Boolean,
-    inFolder: Boolean,
-    folderNames: List<String>,
-    onDock: () -> Unit,
-    onAddToFolder: (String) -> Unit,
-    onRemoveFromFolder: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    var step by remember { mutableStateOf(0) }
-    var newName by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF22C2C2E))
-                .padding(20.dp)
-        ) {
-            Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-            Spacer(Modifier.height(8.dp))
-            if (step == 0) {
-                MenuItem(if (inDock) "Dock se hatao" else "Dock me daalo", onDock)
-                MenuItem("Folder me daalo") { step = 1 }
-                if (inFolder) MenuItem("Folder se bahar nikalo", onRemoveFromFolder)
-            } else {
-                folderNames.forEach { n -> MenuItem(n) { onAddToFolder(n) } }
-                TextField(
-                    value = newName,
-                    onValueChange = { v -> newName = v.filter { ch -> ch != ':' && ch != ';' && ch != ',' } },
-                    placeholder = { Text("Naya folder ka naam") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                MenuItem("Naya folder banao") {
-                    if (newName.isNotBlank()) onAddToFolder(newName.trim())
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SearchOverlay(apps: List<AppItem>, cols: Int, onClose: () -> Unit, onLaunch: (AppItem) -> Unit) {
-    var query by remember { mutableStateOf("") }
-    val focus = remember { FocusRequester() }
-    BackHandler(enabled = true) { onClose() }
-    LaunchedEffect(Unit) { focus.requestFocus() }
-
-    val results = if (query.isBlank()) apps else apps.filter { it.label.contains(query, ignoreCase = true) }
-
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.65f)).imePadding()) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
-            TextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search apps") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().focusRequester(focus)
-            )
-            Spacer(Modifier.height(16.dp))
-            LazyVerticalGrid(columns = GridCells.Fixed(cols), modifier = Modifier.fillMaxSize()) {
-                items(results) { app ->
-                    Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
-                        AppIcon(app = app, onClick = { onLaunch(app) })
-                    }
-                }
-            }
         }
     }
 }
