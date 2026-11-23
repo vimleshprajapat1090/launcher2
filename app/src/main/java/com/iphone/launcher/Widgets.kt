@@ -2,6 +2,7 @@
 
 package com.iphone.launcher
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,7 +40,9 @@ fun WidgetCard(modifier: Modifier, content: @Composable () -> Unit) {
 }
 
 @Composable
-fun ClockWidgets(onLongPress: () -> Unit) {
+fun ClockWidgets(onLongPress: () -> Unit, weather: WeatherInfo?, battery: Int) {
+    val context = LocalContext.current
+    val is24 = DateFormat.is24HourFormat(context)
     val now by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
             delay(10_000)
@@ -47,8 +51,8 @@ fun ClockWidgets(onLongPress: () -> Unit) {
     }
     val date = Date(now)
     val loc = Locale.getDefault()
-    val time = SimpleDateFormat("h:mm", loc).format(date)
-    val ampm = SimpleDateFormat("a", loc).format(date).uppercase()
+    val time = SimpleDateFormat(if (is24) "H:mm" else "h:mm", loc).format(date)
+    val ampm = if (is24) "" else SimpleDateFormat("a", loc).format(date).uppercase()
     val weekday = SimpleDateFormat("EEEE", loc).format(date)
     val dayNum = SimpleDateFormat("d", loc).format(date)
     val month = SimpleDateFormat("MMMM", loc).format(date)
@@ -69,19 +73,42 @@ fun ClockWidgets(onLongPress: () -> Unit) {
                 Modifier.fillMaxSize().padding(16.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(ampm, color = Color(0xFFFF9F0A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(ampm, color = Color(0xFFFF9F0A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    if (battery >= 0) {
+                        Text("Battery " + battery + "%", color = Color(0xFFB0B0B5), fontSize = 12.sp)
+                    }
+                }
                 Text(time, color = Color.White, fontSize = 46.sp, fontWeight = FontWeight.Light)
                 Text(weekday, color = Color(0xFFB0B0B5), fontSize = 14.sp)
             }
         }
         WidgetCard(Modifier.weight(1f).height(160.dp)) {
-            Column(
-                Modifier.fillMaxSize().padding(16.dp),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(weekday.uppercase(), color = Color(0xFFFF453A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(dayNum, color = Color.White, fontSize = 60.sp, fontWeight = FontWeight.Light)
-                Text(month, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+            if (weather != null) {
+                Column(
+                    Modifier.fillMaxSize().padding(16.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(weather.city.uppercase(), color = Color(0xFF64D2FF), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(weather.temp.toString() + "\u00B0", color = Color.White, fontSize = 52.sp, fontWeight = FontWeight.Light)
+                    Column {
+                        Text(weather.desc, color = Color.White, fontSize = 14.sp)
+                        Text(
+                            "H:" + weather.high + "\u00B0  L:" + weather.low + "\u00B0",
+                            color = Color(0xFFB0B0B5),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxSize().padding(16.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(weekday.uppercase(), color = Color(0xFFFF453A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(dayNum, color = Color.White, fontSize = 60.sp, fontWeight = FontWeight.Light)
+                    Text(month, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+                }
             }
         }
     }

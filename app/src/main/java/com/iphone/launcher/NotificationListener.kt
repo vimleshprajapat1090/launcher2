@@ -16,6 +16,7 @@ data class CallInfo(val title: String, val text: String, val actions: List<CallA
 
 object IslandState {
     var call by mutableStateOf<CallInfo?>(null)
+    var badges by mutableStateOf<Map<String, Int>>(emptyMap())
 }
 
 class NotificationListener : NotificationListenerService() {
@@ -34,7 +35,10 @@ class NotificationListener : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
-        handler.post { IslandState.call = null }
+        handler.post {
+            IslandState.call = null
+            IslandState.badges = emptyMap()
+        }
     }
 
     private fun update() {
@@ -54,6 +58,21 @@ class NotificationListener : NotificationListenerService() {
         } catch (e: Exception) {
             null
         }
-        handler.post { IslandState.call = info }
+
+        val counts = HashMap<String, Int>()
+        try {
+            activeNotifications?.forEach { sbn ->
+                val isSummary = (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+                if (!sbn.isOngoing && !isSummary) {
+                    counts[sbn.packageName] = (counts[sbn.packageName] ?: 0) + 1
+                }
+            }
+        } catch (e: Exception) {
+        }
+
+        handler.post {
+            IslandState.call = info
+            IslandState.badges = counts
+        }
     }
 }

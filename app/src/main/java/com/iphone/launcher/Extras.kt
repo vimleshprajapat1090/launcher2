@@ -9,13 +9,21 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import java.io.File
@@ -121,4 +129,22 @@ fun Modifier.frosted(
         )
     }
     drawRect(tint)
+}
+
+class FrostInfo(val blurred: ImageBitmap?, val w: Float, val h: Float)
+
+val LocalFrost = compositionLocalOf<FrostInfo?> { null }
+
+fun Modifier.frostedAuto(tint: Color, fallback: Color): Modifier = composed {
+    val info = LocalFrost.current
+    var pos by remember { mutableStateOf(Offset.Zero) }
+    this
+        .onGloballyPositioned { pos = it.positionInWindow() }
+        .frosted(
+            info?.blurred,
+            info?.w ?: 1f,
+            info?.h ?: 1f,
+            pos,
+            if (info?.blurred != null) tint else fallback
+        )
 }

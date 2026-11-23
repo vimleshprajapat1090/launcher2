@@ -25,6 +25,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
@@ -40,6 +42,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -129,7 +132,7 @@ fun FolderOverlay(
             Modifier.padding(24.dp)
                 .widthIn(max = 480.dp)
                 .clip(RoundedCornerShape(32.dp))
-                .background(Color(0xCC3A3A3C))
+                .frostedAuto(Color(0x661C1C1E), Color(0xCC3A3A3C))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
                 .padding(16.dp)
         ) {
@@ -141,13 +144,23 @@ fun FolderOverlay(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
             )
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(if (cols > 4) 4 else cols),
-                modifier = Modifier.heightIn(max = 420.dp)
-            ) {
-                items(apps) { app ->
-                    Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
-                        AppIcon(app = app, onClick = { onLaunch(app) }, onLongClick = { onLong(app) })
+            if (apps.isEmpty()) {
+                Text(
+                    "Yahan koi app nahi hai",
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp)
+                )
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(if (cols > 4) 4 else cols),
+                    modifier = Modifier.heightIn(max = 420.dp)
+                ) {
+                    items(apps) { app ->
+                        Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
+                            AppIcon(app = app, onClick = { onLaunch(app) }, onLongClick = { onLong(app) })
+                        }
                     }
                 }
             }
@@ -170,11 +183,15 @@ fun HomeMenuDialog(
     hasHidden: Boolean,
     hasWallpaper: Boolean,
     lockReady: Boolean,
+    weatherCity: String,
     onWallpaper: () -> Unit,
     onResetWallpaper: () -> Unit,
     onEdit: () -> Unit,
     onHidden: () -> Unit,
     onLockSetup: () -> Unit,
+    onWeather: () -> Unit,
+    onResetLayout: () -> Unit,
+    onDefaultHome: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -188,11 +205,71 @@ fun HomeMenuDialog(
             MenuItem("Wallpaper chuno (gallery se)", onWallpaper)
             if (hasWallpaper) MenuItem("Default wallpaper pe wapas", onResetWallpaper)
             MenuItem("Icons edit karo (hilne wale)", onEdit)
-            if (hasHidden) MenuItem("Hidden apps dekho", onHidden)
+            if (hasHidden) MenuItem("Hidden apps dekho (PIN lagega)", onHidden)
+            MenuItem(
+                if (weatherCity.isBlank()) "Weather ka sheher set karo" else "Weather sheher: " + weatherCity,
+                onWeather
+            )
             MenuItem(
                 if (lockReady) "Double-tap lock: chalu hai" else "Double-tap lock chalu karo",
                 onLockSetup
             )
+            MenuItem("Home layout reset (order, folders)", onResetLayout)
+            MenuItem("Default launcher settings", onDefaultHome)
+        }
+    }
+}
+
+@Composable
+fun CityDialog(current: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf(current) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(24.dp))
+                .background(Color(0xF22C2C2E))
+                .padding(20.dp)
+        ) {
+            Text("Weather ka sheher", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Spacer(Modifier.height(8.dp))
+            TextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = { Text("Jaise: Jaipur") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            MenuItem("Save") { onSave(text.trim()) }
+            MenuItem("Weather hatao") { onSave("") }
+        }
+    }
+}
+
+@Composable
+fun FolderMenuDialog(
+    name: String,
+    onRename: (String) -> Unit,
+    onDissolve: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var text by remember { mutableStateOf(name) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(24.dp))
+                .background(Color(0xF22C2C2E))
+                .padding(20.dp)
+        ) {
+            Text("Folder: " + name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Spacer(Modifier.height(8.dp))
+            TextField(
+                value = text,
+                onValueChange = { v -> text = v.filter { ch -> ch != ':' && ch != ';' && ch != ',' } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            MenuItem("Naam badlo") {
+                if (text.isNotBlank()) onRename(text.trim())
+            }
+            MenuItem("Folder hatao (apps wapas home pe)", onDissolve)
         }
     }
 }
@@ -210,6 +287,8 @@ fun AppActionDialog(
     onRemoveFromFolder: () -> Unit,
     onToggleHome: () -> Unit,
     onToggleHidden: () -> Unit,
+    onInfo: () -> Unit,
+    onUninstall: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var step by remember { mutableStateOf(0) }
@@ -231,6 +310,8 @@ fun AppActionDialog(
                     onToggleHome
                 )
                 MenuItem(if (isHidden) "Hidden se wapas lao" else "App chhupao (Hide)", onToggleHidden)
+                MenuItem("App info", onInfo)
+                MenuItem("Uninstall", onUninstall)
             } else {
                 folderNames.forEach { n -> MenuItem(n) { onAddToFolder(n) } }
                 TextField(
@@ -264,13 +345,37 @@ fun SearchOverlay(apps: List<AppItem>, cols: Int, onClose: () -> Unit, onLaunch:
                 onValueChange = { query = it },
                 placeholder = { Text("Search apps") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {
+                    val first = results.firstOrNull()
+                    if (first != null) onLaunch(first)
+                }),
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        Text(
+                            "X",
+                            color = Color.Gray,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { query = "" }.padding(12.dp)
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().focusRequester(focus)
             )
             Spacer(Modifier.height(16.dp))
-            LazyVerticalGrid(columns = GridCells.Fixed(cols), modifier = Modifier.fillMaxSize()) {
-                items(results) { app ->
-                    Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
-                        AppIcon(app = app, onClick = { onLaunch(app) })
+            if (results.isEmpty()) {
+                Text(
+                    "Koi app nahi mila",
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(16.dp)
+                )
+            } else {
+                LazyVerticalGrid(columns = GridCells.Fixed(cols), modifier = Modifier.fillMaxSize()) {
+                    items(results) { app ->
+                        Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
+                            AppIcon(app = app, onClick = { onLaunch(app) })
+                        }
                     }
                 }
             }

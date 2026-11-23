@@ -6,6 +6,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -25,8 +26,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -93,6 +96,31 @@ fun openWriteSettings(context: Context) {
     }
 }
 
+fun readWifiOn(context: Context): Boolean {
+    return try {
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wm.isWifiEnabled
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun readGlobal(context: Context, key: String): Boolean {
+    return try {
+        Settings.Global.getInt(context.contentResolver, key, 0) == 1
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun readAutoRotate(context: Context): Boolean {
+    return try {
+        Settings.System.getInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION, 1) == 1
+    } catch (e: Exception) {
+        true
+    }
+}
+
 @Composable
 fun CCCircle(label: String, on: Boolean, onClick: () -> Unit) {
     Box(
@@ -109,7 +137,9 @@ fun CCCircle(label: String, on: Boolean, onClick: () -> Unit) {
 @Composable
 fun CCCard(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
-        modifier = modifier.clip(RoundedCornerShape(28.dp)).background(Color(0xCC2C2C2E)),
+        modifier = modifier
+            .clip(RoundedCornerShape(28.dp))
+            .frostedAuto(Color(0x661C1C1E), Color(0xCC2C2C2E)),
         content = content
     )
 }
@@ -124,6 +154,10 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
     var bright by remember { mutableStateOf(readBrightness(context).coerceIn(0.05f, 1f)) }
     var asked by remember { mutableStateOf(false) }
     var torch by remember { mutableStateOf(false) }
+    var rotateOn by remember { mutableStateOf(readAutoRotate(context)) }
+    val wifiOn = remember { readWifiOn(context) }
+    val btOn = remember { readGlobal(context, "bluetooth_on") }
+    val airOn = remember { readGlobal(context, Settings.Global.AIRPLANE_MODE_ON) }
     val info = media.info
 
     Box(
@@ -137,9 +171,38 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                 .padding(top = 56.dp)
                 .padding(16.dp)
                 .widthIn(max = 420.dp)
+                .verticalScroll(rememberScrollState())
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            CCCard(Modifier.fillMaxWidth().height(90.dp)) {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("Brightness", color = Color.White, fontSize = 12.sp)
+                    Slider(
+                        value = bright,
+                        onValueChange = { v ->
+                            if (Settings.System.canWrite(context)) {
+                                bright = v
+                                setBrightness(context, v)
+                            } else if (!asked) {
+                                asked = true
+                                openWriteSettings(context)
+                            } else {
+                                bright = bright
+                            }
+                        },
+                        valueRange = 0.05f..1f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color.White,
+                            inactiveTrackColor = Color(0x55FFFFFF)
+                        )
+                    )
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CCCard(Modifier.weight(1f).aspectRatio(1f)) {
                     Column(
@@ -147,11 +210,11 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         verticalArrangement = Arrangement.SpaceEvenly
                     ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            CCCircle("Wi-Fi", true) { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
-                            CCCircle("BT", false) { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
+                            CCCircle("Wi-Fi", wifiOn) { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
+                            CCCircle("BT", btOn) { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            CCCircle("Plane", false) { openSettings(context, Settings.ACTION_AIRPLANE_MODE_SETTINGS) }
+                            CCCircle("Plane", airOn) { openSettings(context, Settings.ACTION_AIRPLANE_MODE_SETTINGS) }
                             CCCircle("Data", false) { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                         }
                     }
@@ -209,6 +272,26 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         }
                     }
                 }
+                CCCard(Modifier.size(90.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CCCircle("Rotate", rotateOn) {
+                            if (Settings.System.canWrite(context)) {
+                                val next = !rotateOn
+                                rotateOn = next
+                                try {
+                                    Settings.System.putInt(
+                                        context.contentResolver,
+                                        Settings.System.ACCELEROMETER_ROTATION,
+                                        if (next) 1 else 0
+                                    )
+                                } catch (e: Exception) {
+                                }
+                            } else {
+                                openWriteSettings(context)
+                            }
+                        }
+                    }
+                }
                 CCCard(Modifier.weight(1f).height(90.dp)) {
                     Column(
                         Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -229,34 +312,6 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                             )
                         )
                     }
-                }
-            }
-            CCCard(Modifier.fillMaxWidth().height(90.dp)) {
-                Column(
-                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("Brightness", color = Color.White, fontSize = 12.sp)
-                    Slider(
-                        value = bright,
-                        onValueChange = { v ->
-                            if (Settings.System.canWrite(context)) {
-                                bright = v
-                                setBrightness(context, v)
-                            } else if (!asked) {
-                                asked = true
-                                openWriteSettings(context)
-                            } else {
-                                bright = bright
-                            }
-                        },
-                        valueRange = 0.05f..1f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color.White,
-                            inactiveTrackColor = Color(0x55FFFFFF)
-                        )
-                    )
                 }
             }
         }

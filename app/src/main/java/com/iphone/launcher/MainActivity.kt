@@ -4,6 +4,7 @@ package com.iphone.launcher
 
 import android.app.Activity
 import android.app.ActivityOptions
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -13,6 +14,7 @@ import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -50,8 +52,10 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +74,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -78,6 +85,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 data class AppItem(
@@ -103,14 +111,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppFont = loadAppFont()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
-            LauncherScreen(
-                media = media,
-                hasAccess = hasAccess,
-                call = IslandState.call,
-                onNeedAccess = { openAccessSettings() }
-            )
+            CompositionLocalProvider(
+                LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = AppFont)
+            ) {
+                LauncherScreen(
+                    media = media,
+                    hasAccess = hasAccess,
+                    call = IslandState.call,
+                    onNeedAccess = { openAccessSettings() }
+                )
+            }
         }
     }
 
@@ -126,6 +139,11 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    private fun loadAppFont(): FontFamily {
+        val id = resources.getIdentifier("inter", "font", packageName)
+        return if (id != 0) FontFamily(Font(id)) else FontFamily.Default
+    }
+
     private fun openAccessSettings() {
         try {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -139,11 +157,11 @@ fun categoryOf(pm: PackageManager, pkg: String): String {
     val p = pkg.lowercase()
     fun has(vararg keys: String): Boolean = keys.any { p.contains(it) }
     when {
-        has("whatsapp", "instagram", "facebook", "telegram", "snapchat", "twitter", "messenger", "linkedin", "discord", "reddit", "threads") -> return "Social"
-        has("youtube", "netflix", "spotify", "hotstar", "music", "video", "vlc") -> return "Entertainment"
-        has("camera", "gallery", "photos", "editor") -> return "Creativity"
-        has("maps", "uber", "irctc", "travel", "booking") -> return "Travel"
-        has("paytm", "phonepe", "bank", "finance", "docs", "sheets", "drive", "office", "gmail", "calendar", "notes", "keep") -> return "Productivity"
+        has("whatsapp", "instagram", "facebook", "telegram", "snapchat", "twitter", "messenger", "linkedin", "discord", "reddit", "threads", "sharechat", "koo", "moj") -> return "Social"
+        has("youtube", "netflix", "spotify", "hotstar", "music", "video", "vlc", "primevideo", "jiocinema", "sonyliv", "zee5", "gaana", "wynk", "saavn") -> return "Entertainment"
+        has("camera", "gallery", "photos", "editor", "canva", "snapseed") -> return "Creativity"
+        has("maps", "uber", "ola", "irctc", "travel", "booking", "makemytrip", "redbus", "goibibo", "rapido", "zomato", "swiggy") -> return "Travel"
+        has("paytm", "phonepe", "bank", "finance", "docs", "sheets", "drive", "office", "gmail", "calendar", "notes", "keep", "upi", "bhim", "gpay", "sbi", "hdfc", "icici", "upstox", "zerodha", "groww") -> return "Productivity"
     }
     return try {
         when (pm.getApplicationInfo(pkg, 0).category) {
@@ -210,6 +228,12 @@ fun parseFolders(s: String): List<Pair<String, List<String>>> =
 fun serializeFolders(f: List<Pair<String, List<String>>>): String =
     f.joinToString(";") { it.first + ":" + it.second.joinToString(",") }
 
+fun folderBadge(apps: List<AppItem>, badges: Map<String, Int>): Int {
+    var total = 0
+    apps.forEach { total += badges[it.pkg] ?: 0 }
+    return total
+}
+
 @Composable
 fun wiggleState(active: Boolean): State<Float> {
     val zero = remember { mutableStateOf(0f) }
@@ -230,17 +254,32 @@ fun wiggleState(active: Boolean): State<Float> {
 @Composable
 fun IconGrid(
     items: List<HomeItem>,
+    baseIndex: Int,
     rowCount: Int,
     cols: Int,
     iconSize: Dp,
     editing: Boolean,
     wiggle: State<Float>,
+    badges: Map<String, Int>,
     onLaunch: (AppItem) -> Unit,
     onLong: (AppItem) -> Unit,
     onRemove: (AppItem) -> Unit,
-    onFolder: (String, List<AppItem>) -> Unit
+    onFolder: (String, List<AppItem>) -> Unit,
+    onFolderLong: (String) -> Unit,
+    onReorder: (AppItem, Int) -> Unit
 ) {
-    Column(Modifier.fillMaxWidth()) {
+    val density = LocalDensity.current
+    val cellHpx = with(density) { 100.dp.toPx() }
+    val origin = remember { FloatArray(3) }
+
+    Column(
+        Modifier.fillMaxWidth().onGloballyPositioned {
+            val p = it.positionInWindow()
+            origin[0] = p.x
+            origin[1] = p.y
+            origin[2] = it.size.width.toFloat()
+        }
+    ) {
         for (r in 0 until rowCount) {
             Row(Modifier.fillMaxWidth().height(100.dp)) {
                 for (c in 0 until cols) {
@@ -255,15 +294,29 @@ fun IconGrid(
                                     size = iconSize,
                                     editing = editing,
                                     wiggle = if (editing) wiggle else null,
+                                    badge = badges[item.app.pkg] ?: 0,
+                                    enableDrag = true,
                                     onRemove = { onRemove(item.app) },
                                     onClick = { if (!editing) onLaunch(item.app) },
-                                    onLongClick = { if (!editing) onLong(item.app) }
+                                    onLongClick = { onLong(item.app) },
+                                    onDrop = { pt ->
+                                        val cw = origin[2] / cols
+                                        val col = if (cw > 0f) {
+                                            ((pt.x - origin[0]) / cw).toInt().coerceIn(0, cols - 1)
+                                        } else {
+                                            0
+                                        }
+                                        val row = ((pt.y - origin[1]) / cellHpx).toInt().coerceIn(0, rowCount - 1)
+                                        onReorder(item.app, baseIndex + row * cols + col)
+                                    }
                                 )
                                 is HomeItem.FolderEntry -> FolderIcon(
                                     name = item.name,
                                     apps = item.apps,
                                     size = iconSize,
-                                    onClick = { if (!editing) onFolder(item.name, item.apps) }
+                                    badge = folderBadge(item.apps, badges),
+                                    onClick = { if (!editing) onFolder(item.name, item.apps) },
+                                    onLongClick = { if (!editing) onFolderLong(item.name) }
                                 )
                             }
                         }
@@ -297,20 +350,45 @@ fun LauncherScreen(
     var dockPkgs by remember { mutableStateOf(readList("dock")) }
     var noHome by remember { mutableStateOf(readList("nohome")) }
     var hidden by remember { mutableStateOf(readList("hidden")) }
+    var order by remember { mutableStateOf(readList("order")) }
     var folders by remember { mutableStateOf(parseFolders(prefs.getString("folders", "")!!)) }
+    var weatherCity by remember { mutableStateOf(prefs.getString("city", "")!!) }
     var searching by remember { mutableStateOf(false) }
     var showControl by remember { mutableStateOf(false) }
     var showHomeMenu by remember { mutableStateOf(false) }
+    var showCityDialog by remember { mutableStateOf(false) }
+    var folderMenu by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
     var wallVersion by remember { mutableStateOf(0) }
     var dockPos by remember { mutableStateOf(Offset.Zero) }
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var openGroup by remember { mutableStateOf<Pair<String, List<AppItem>>?>(null) }
 
+    val badges = IslandState.badges
     val wiggle = wiggleState(editing)
 
     val wallpaper by produceState<WallpaperImages?>(initialValue = null, wallVersion) {
         value = withContext(Dispatchers.IO) { loadWallpaper(context) }
+    }
+
+    val weather by produceState<WeatherInfo?>(initialValue = null, weatherCity) {
+        while (true) {
+            if (weatherCity.isBlank()) {
+                value = null
+            } else {
+                val f = withContext(Dispatchers.IO) { fetchWeather(weatherCity) }
+                if (f != null) value = f
+            }
+            delay(30 * 60 * 1000L)
+        }
+    }
+
+    val battery by produceState(initialValue = -1) {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        while (true) {
+            value = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            delay(60_000)
+        }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -325,12 +403,22 @@ fun LauncherScreen(
 
     val visible = apps.filter { it.pkg !in hidden }
     val hiddenApps = apps.filter { it.pkg in hidden }
+
+    val pinLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            openGroup = "Hidden" to hiddenApps
+        }
+    }
+
     val dock = dockPkgs.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }
         .ifEmpty { visible.take(4) }
     val folderPkgs = folders.flatMap { it.second }.toSet()
-    val homeApps = visible.filter { a ->
-        dock.none { it.pkg == a.pkg } && a.pkg !in folderPkgs && a.pkg !in noHome
-    }
+    val homeApps = visible
+        .filter { a -> dock.none { it.pkg == a.pkg } && a.pkg !in folderPkgs && a.pkg !in noHome }
+        .sortedBy { a ->
+            val i = order.indexOf(a.pkg)
+            if (i < 0) Int.MAX_VALUE else i
+        }
     val folderEntries = folders
         .map { f -> HomeItem.FolderEntry(f.first, f.second.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }) }
         .filter { it.apps.isNotEmpty() }
@@ -405,6 +493,28 @@ fun LauncherScreen(
         saveFolders(folders.map { it.first to it.second.filter { p -> p != pkg } })
     }
 
+    fun renameFolder(old: String, new: String) {
+        if (new != old && folders.any { it.first == new }) {
+            Toast.makeText(context, "Is naam ka folder pehle se hai", Toast.LENGTH_SHORT).show()
+        } else {
+            saveFolders(folders.map { if (it.first == old) new to it.second else it })
+        }
+    }
+
+    fun dissolveFolder(name: String) {
+        saveFolders(folders.filter { it.first != name })
+    }
+
+    fun reorderApp(app: AppItem, globalIdx: Int) {
+        if (homeApps.isEmpty()) return
+        val target = (globalIdx - folderEntries.size).coerceIn(0, homeApps.size - 1)
+        val list = homeApps.map { it.pkg }.toMutableList()
+        list.remove(app.pkg)
+        list.add(target.coerceAtMost(list.size), app.pkg)
+        order = list
+        saveList("order", list)
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val screenW = constraints.maxWidth.toFloat()
         val screenH = constraints.maxHeight.toFloat()
@@ -418,246 +528,341 @@ fun LauncherScreen(
             listOf(items.take(firstCount)) + items.drop(firstCount).chunked(cols * rows)
         val pagerState = rememberPagerState(pageCount = { pages.size + 1 })
 
-        wallpaper?.let { w ->
-            Image(
-                bitmap = w.full,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-
-        Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 44.dp)
-        ) {
-            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
-                if (page < pages.size) {
-                    Column(
-                        Modifier.fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectTapGestures(onDoubleTap = { lockScreen(context) })
-                            }
-                            .padding(top = 8.dp, start = 12.dp, end = 12.dp)
-                    ) {
-                        if (page == 0) {
-                            Box(Modifier.fillMaxWidth().height(170.dp)) {
-                                ClockWidgets(onLongPress = { showHomeMenu = true })
-                            }
-                        }
-                        IconGrid(
-                            items = pages[page],
-                            rowCount = if (page == 0) firstRows else rows,
-                            cols = cols,
-                            iconSize = iconSize,
-                            editing = editing,
-                            wiggle = wiggle,
-                            onLaunch = launch,
-                            onLong = { app -> menuApp = app },
-                            onRemove = { app -> toggleHome(app.pkg) },
-                            onFolder = { name, list -> openGroup = name to list }
-                        )
-                    }
-                } else {
-                    LibraryPage(
-                        apps = visible,
-                        onSearch = { searching = true },
-                        onOpen = { name, list -> openGroup = name to list }
-                    )
-                }
+        CompositionLocalProvider(LocalFrost provides FrostInfo(wallpaper?.blurred, screenW, screenH)) {
+            wallpaper?.let { w ->
+                Image(
+                    bitmap = w.full,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
-            Row(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.Center) {
-                repeat(pagerState.pageCount) { i ->
-                    Box(
-                        Modifier.padding(3.dp).size(7.dp).clip(CircleShape).background(
-                            Color.White.copy(alpha = if (i == pagerState.currentPage) 1f else 0.4f)
-                        )
-                    )
-                }
-            }
-
-            Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
-                if (editing) {
-                    Box(
-                        Modifier.clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF0A84FF))
-                            .clickable { editing = false }
-                            .padding(horizontal = 32.dp, vertical = 8.dp)
-                    ) {
-                        Text("Done", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    }
-                } else {
-                    Box(
-                        Modifier.clip(RoundedCornerShape(20.dp))
-                            .background(Color.White.copy(alpha = 0.25f))
-                            .combinedClickable(
-                                onClick = { searching = true },
-                                onLongClick = { showHomeMenu = true }
+            Column(
+                Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 44.dp)
+            ) {
+                HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
+                    if (page < pages.size) {
+                        Column(
+                            Modifier.fillMaxSize()
+                                .pointerInput(Unit) {
+                                    detectTapGestures(onDoubleTap = { lockScreen(context) })
+                                }
+                                .pointerInput(Unit) {
+                                    var total = 0f
+                                    detectVerticalDragGestures(
+                                        onDragStart = { total = 0f },
+                                        onDragEnd = { if (total > 140f) searching = true },
+                                        onDragCancel = { total = 0f },
+                                        onVerticalDrag = { _, amount -> total += amount }
+                                    )
+                                }
+                                .padding(top = 8.dp, start = 12.dp, end = 12.dp)
+                        ) {
+                            if (page == 0) {
+                                Box(Modifier.fillMaxWidth().height(170.dp)) {
+                                    ClockWidgets(
+                                        onLongPress = { showHomeMenu = true },
+                                        weather = weather,
+                                        battery = battery
+                                    )
+                                }
+                            }
+                            IconGrid(
+                                items = pages[page],
+                                baseIndex = if (page == 0) 0 else firstCount + (page - 1) * cols * rows,
+                                rowCount = if (page == 0) firstRows else rows,
+                                cols = cols,
+                                iconSize = iconSize,
+                                editing = editing,
+                                wiggle = wiggle,
+                                badges = badges,
+                                onLaunch = launch,
+                                onLong = { app -> menuApp = app },
+                                onRemove = { app -> toggleHome(app.pkg) },
+                                onFolder = { name, list -> openGroup = name to list },
+                                onFolderLong = { name -> folderMenu = name },
+                                onReorder = { app, idx -> reorderApp(app, idx) }
                             )
-                            .padding(horizontal = 28.dp, vertical = 8.dp)
-                    ) {
-                        Text("Search", color = Color.White, fontSize = 13.sp)
-                    }
-                }
-            }
-
-            Box(Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
-                Row(
-                    Modifier.clip(RoundedCornerShape(32.dp))
-                        .onGloballyPositioned { dockPos = it.positionInWindow() }
-                        .frosted(
-                            wallpaper?.blurred,
-                            screenW,
-                            screenH,
-                            dockPos,
-                            Color.White.copy(alpha = if (wallpaper != null) 0.14f else 0.22f)
-                        )
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    dock.forEach { app ->
-                        AppIcon(
-                            app = app,
-                            size = iconSize,
-                            showLabel = false,
-                            onClick = { if (!editing) launch(app) },
-                            onLongClick = { if (!editing) menuApp = app }
-                        )
-                    }
-                }
-            }
-        }
-
-        Box(
-            Modifier.align(Alignment.TopEnd)
-                .statusBarsPadding()
-                .padding(top = 2.dp)
-                .width(150.dp)
-                .height(46.dp)
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures { _, dragAmount ->
-                        if (dragAmount > 6f) showControl = true
-                    }
-                }
-        )
-        Box(
-            Modifier.align(Alignment.TopStart)
-                .statusBarsPadding()
-                .padding(top = 2.dp)
-                .width(150.dp)
-                .height(46.dp)
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures { _, dragAmount ->
-                        if (dragAmount > 6f) expandNotifications(context)
-                    }
-                }
-        )
-
-        if (searching) {
-            SearchOverlay(
-                apps = visible,
-                cols = cols,
-                onClose = { searching = false },
-                onLaunch = { app ->
-                    searching = false
-                    launch(app)
-                }
-            )
-        }
-
-        openGroup?.let { group ->
-            FolderOverlay(
-                title = group.first,
-                apps = group.second,
-                cols = cols,
-                onClose = { openGroup = null },
-                onLaunch = { app ->
-                    openGroup = null
-                    launch(app)
-                },
-                onLong = { app -> menuApp = app }
-            )
-        }
-
-        if (showHomeMenu) {
-            HomeMenuDialog(
-                hasHidden = hiddenApps.isNotEmpty(),
-                hasWallpaper = wallpaper != null,
-                lockReady = isLockReady(context),
-                onWallpaper = {
-                    showHomeMenu = false
-                    picker.launch("image/*")
-                },
-                onResetWallpaper = {
-                    deleteWallpaper(context)
-                    wallVersion += 1
-                    showHomeMenu = false
-                },
-                onEdit = {
-                    editing = true
-                    showHomeMenu = false
-                },
-                onHidden = {
-                    openGroup = "Hidden" to hiddenApps
-                    showHomeMenu = false
-                },
-                onLockSetup = {
-                    showHomeMenu = false
-                    if (isLockReady(context)) {
-                        Toast.makeText(context, "Double-tap lock pehle se chalu hai", Toast.LENGTH_SHORT).show()
+                        }
                     } else {
-                        requestLockAdmin(context)
+                        LibraryPage(
+                            apps = visible,
+                            onSearch = { searching = true },
+                            onOpen = { name, list -> openGroup = name to list }
+                        )
                     }
-                },
-                onDismiss = { showHomeMenu = false }
+                }
+
+                Row(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.Center) {
+                    repeat(pagerState.pageCount) { i ->
+                        Box(
+                            Modifier.padding(3.dp).size(7.dp).clip(CircleShape).background(
+                                Color.White.copy(alpha = if (i == pagerState.currentPage) 1f else 0.4f)
+                            )
+                        )
+                    }
+                }
+
+                Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                    if (editing) {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(20.dp))
+                                .background(Color(0xFF0A84FF))
+                                .clickable { editing = false }
+                                .padding(horizontal = 32.dp, vertical = 8.dp)
+                        ) {
+                            Text("Done", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(20.dp))
+                                .background(Color.White.copy(alpha = 0.25f))
+                                .combinedClickable(
+                                    onClick = { searching = true },
+                                    onLongClick = { showHomeMenu = true }
+                                )
+                                .padding(horizontal = 28.dp, vertical = 8.dp)
+                        ) {
+                            Text("Search", color = Color.White, fontSize = 13.sp)
+                        }
+                    }
+                }
+
+                Box(Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(32.dp))
+                            .onGloballyPositioned { dockPos = it.positionInWindow() }
+                            .frosted(
+                                wallpaper?.blurred,
+                                screenW,
+                                screenH,
+                                dockPos,
+                                Color.White.copy(alpha = if (wallpaper != null) 0.14f else 0.22f)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        dock.forEach { app ->
+                            AppIcon(
+                                app = app,
+                                size = iconSize,
+                                showLabel = false,
+                                badge = badges[app.pkg] ?: 0,
+                                onClick = { if (!editing) launch(app) },
+                                onLongClick = { if (!editing) menuApp = app }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(
+                Modifier.align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 2.dp)
+                    .width(150.dp)
+                    .height(46.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, dragAmount ->
+                            if (dragAmount > 6f) showControl = true
+                        }
+                    }
             )
-        }
-
-        menuApp?.let { app ->
-            AppActionDialog(
-                app = app,
-                inDock = dock.any { it.pkg == app.pkg },
-                inFolder = app.pkg in folderPkgs,
-                inNoHome = app.pkg in noHome,
-                isHidden = app.pkg in hidden,
-                folderNames = folders.map { it.first },
-                onDock = {
-                    toggleDock(app)
-                    menuApp = null
-                },
-                onAddToFolder = { name ->
-                    moveToFolder(app.pkg, name)
-                    menuApp = null
-                    openGroup = null
-                },
-                onRemoveFromFolder = {
-                    removeFromFolder(app.pkg)
-                    menuApp = null
-                    openGroup = null
-                },
-                onToggleHome = {
-                    toggleHome(app.pkg)
-                    menuApp = null
-                },
-                onToggleHidden = {
-                    toggleHidden(app.pkg)
-                    menuApp = null
-                    openGroup = null
-                },
-                onDismiss = { menuApp = null }
+            Box(
+                Modifier.align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(top = 2.dp)
+                    .width(150.dp)
+                    .height(46.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, dragAmount ->
+                            if (dragAmount > 6f) expandNotifications(context)
+                        }
+                    }
             )
-        }
 
-        if (showControl) {
-            ControlCenter(media = media, onClose = { showControl = false })
-        }
+            if (searching) {
+                SearchOverlay(
+                    apps = visible,
+                    cols = cols,
+                    onClose = { searching = false },
+                    onLaunch = { app ->
+                        searching = false
+                        launch(app)
+                    }
+                )
+            }
 
-        Box(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            DynamicIsland(media = media, call = call, hasAccess = hasAccess, onNeedAccess = onNeedAccess)
+            openGroup?.let { group ->
+                FolderOverlay(
+                    title = group.first,
+                    apps = group.second,
+                    cols = cols,
+                    onClose = { openGroup = null },
+                    onLaunch = { app ->
+                        openGroup = null
+                        launch(app)
+                    },
+                    onLong = { app -> menuApp = app }
+                )
+            }
+
+            if (showHomeMenu) {
+                HomeMenuDialog(
+                    hasHidden = hiddenApps.isNotEmpty(),
+                    hasWallpaper = wallpaper != null,
+                    lockReady = isLockReady(context),
+                    weatherCity = weatherCity,
+                    onWallpaper = {
+                        showHomeMenu = false
+                        picker.launch("image/*")
+                    },
+                    onResetWallpaper = {
+                        deleteWallpaper(context)
+                        wallVersion += 1
+                        showHomeMenu = false
+                    },
+                    onEdit = {
+                        editing = true
+                        showHomeMenu = false
+                    },
+                    onHidden = {
+                        showHomeMenu = false
+                        val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                        val pinIntent = km.createConfirmDeviceCredentialIntent(
+                            "Hidden apps",
+                            "Phone ka PIN, pattern ya fingerprint daalo"
+                        )
+                        if (pinIntent != null) {
+                            pinLauncher.launch(pinIntent)
+                        } else {
+                            openGroup = "Hidden" to hiddenApps
+                        }
+                    },
+                    onLockSetup = {
+                        showHomeMenu = false
+                        if (isLockReady(context)) {
+                            Toast.makeText(context, "Double-tap lock pehle se chalu hai", Toast.LENGTH_SHORT).show()
+                        } else {
+                            requestLockAdmin(context)
+                        }
+                    },
+                    onWeather = {
+                        showHomeMenu = false
+                        showCityDialog = true
+                    },
+                    onResetLayout = {
+                        order = emptyList()
+                        noHome = emptyList()
+                        saveList("order", emptyList())
+                        saveList("nohome", emptyList())
+                        saveFolders(emptyList())
+                        showHomeMenu = false
+                    },
+                    onDefaultHome = {
+                        showHomeMenu = false
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Settings nahi khuli", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDismiss = { showHomeMenu = false }
+                )
+            }
+
+            if (showCityDialog) {
+                CityDialog(
+                    current = weatherCity,
+                    onSave = { city ->
+                        weatherCity = city
+                        prefs.edit().putString("city", city).apply()
+                        showCityDialog = false
+                    },
+                    onDismiss = { showCityDialog = false }
+                )
+            }
+
+            folderMenu?.let { fname ->
+                FolderMenuDialog(
+                    name = fname,
+                    onRename = { newName ->
+                        renameFolder(fname, newName)
+                        folderMenu = null
+                    },
+                    onDissolve = {
+                        dissolveFolder(fname)
+                        folderMenu = null
+                    },
+                    onDismiss = { folderMenu = null }
+                )
+            }
+
+            menuApp?.let { app ->
+                AppActionDialog(
+                    app = app,
+                    inDock = dock.any { it.pkg == app.pkg },
+                    inFolder = app.pkg in folderPkgs,
+                    inNoHome = app.pkg in noHome,
+                    isHidden = app.pkg in hidden,
+                    folderNames = folders.map { it.first },
+                    onDock = {
+                        toggleDock(app)
+                        menuApp = null
+                    },
+                    onAddToFolder = { name ->
+                        moveToFolder(app.pkg, name)
+                        menuApp = null
+                        openGroup = null
+                    },
+                    onRemoveFromFolder = {
+                        removeFromFolder(app.pkg)
+                        menuApp = null
+                        openGroup = null
+                    },
+                    onToggleHome = {
+                        toggleHome(app.pkg)
+                        menuApp = null
+                    },
+                    onToggleHidden = {
+                        toggleHidden(app.pkg)
+                        menuApp = null
+                        openGroup = null
+                    },
+                    onInfo = {
+                        menuApp = null
+                        try {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + app.pkg))
+                            )
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "App info nahi khuli", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onUninstall = {
+                        menuApp = null
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:" + app.pkg)))
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Uninstall nahi khula", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDismiss = { menuApp = null }
+                )
+            }
+
+            if (showControl) {
+                ControlCenter(media = media, onClose = { showControl = false })
+            }
+
+            Box(
+                Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                DynamicIsland(media = media, call = call, hasAccess = hasAccess, onNeedAccess = onNeedAccess)
+            }
         }
     }
 }
