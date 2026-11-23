@@ -11,14 +11,14 @@ android {
         applicationId = "com.iphone.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 4
+        versionName = "4.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
-            isShrinkResources = true
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName("debug")
         }
