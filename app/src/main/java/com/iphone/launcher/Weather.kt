@@ -1,5 +1,6 @@
 package com.iphone.launcher
 
+import android.content.SharedPreferences
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -72,4 +73,25 @@ fun fetchWeather(city: String): WeatherInfo? {
     } catch (e: Exception) {
         null
     }
+}
+
+fun readCachedWeather(prefs: SharedPreferences): WeatherInfo? {
+    val city = prefs.getString("w_city", null) ?: return null
+    return WeatherInfo(
+        city = city,
+        temp = prefs.getInt("w_temp", 0),
+        high = prefs.getInt("w_high", 0),
+        low = prefs.getInt("w_low", 0),
+        desc = prefs.getString("w_desc", "") ?: ""
+    )
+}
+
+fun cacheWeather(prefs: SharedPreferences, w: WeatherInfo) {
+    prefs.edit()
+        .putString("w_city", w.city)
+        .putInt("w_temp", w.temp)
+        .putInt("w_high", w.high)
+        .putInt("w_low", w.low)
+        .putString("w_desc", w.desc)
+        .apply()
 }

@@ -3,8 +3,10 @@
 package com.iphone.launcher
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -41,6 +44,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -184,12 +191,15 @@ fun HomeMenuDialog(
     hasWallpaper: Boolean,
     lockReady: Boolean,
     weatherCity: String,
+    dockMax: Int,
     onWallpaper: () -> Unit,
     onResetWallpaper: () -> Unit,
     onEdit: () -> Unit,
     onHidden: () -> Unit,
     onLockSetup: () -> Unit,
     onWeather: () -> Unit,
+    onWidgets: () -> Unit,
+    onDockSize: () -> Unit,
     onResetLayout: () -> Unit,
     onDefaultHome: () -> Unit,
     onDismiss: () -> Unit
@@ -202,20 +212,124 @@ fun HomeMenuDialog(
         ) {
             Text("Home Screen", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
             Spacer(Modifier.height(8.dp))
+            MenuItem("Icons edit karo (khiskane ke liye)", onEdit)
             MenuItem("Wallpaper chuno (gallery se)", onWallpaper)
             if (hasWallpaper) MenuItem("Default wallpaper pe wapas", onResetWallpaper)
-            MenuItem("Icons edit karo (hilne wale)", onEdit)
-            if (hasHidden) MenuItem("Hidden apps dekho (PIN lagega)", onHidden)
+            MenuItem("Widgets chuno", onWidgets)
             MenuItem(
                 if (weatherCity.isBlank()) "Weather ka sheher set karo" else "Weather sheher: " + weatherCity,
                 onWeather
             )
+            MenuItem("Dock me max apps: " + dockMax + " (badlo)", onDockSize)
+            if (hasHidden) MenuItem("Hidden apps dekho (PIN lagega)", onHidden)
             MenuItem(
                 if (lockReady) "Double-tap lock: chalu hai" else "Double-tap lock chalu karo",
                 onLockSetup
             )
             MenuItem("Home layout reset (order, folders)", onResetLayout)
             MenuItem("Default launcher settings", onDefaultHome)
+        }
+    }
+}
+
+@Composable
+fun WidgetPickerDialog(
+    selected: List<String>,
+    onToggle: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(24.dp))
+                .background(Color(0xF22C2C2E))
+                .padding(20.dp)
+        ) {
+            Text("Widgets (Today page)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Spacer(Modifier.height(8.dp))
+            WIDGET_CATALOG.forEach { entry ->
+                val on = entry.first in selected
+                MenuItem((if (on) "ON   " else "OFF  ") + entry.second) { onToggle(entry.first) }
+            }
+            MenuItem("Done", onDismiss)
+        }
+    }
+}
+
+@Composable
+fun WallpaperPreview(
+    image: ImageBitmap,
+    onApply: (Float, Float, Float) -> Unit,
+    onCancel: () -> Unit
+) {
+    var zoom by remember { mutableStateOf(1f) }
+    var tx by remember { mutableStateOf(0f) }
+    var ty by remember { mutableStateOf(0f) }
+    BackHandler(enabled = true) { onCancel() }
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, z, _ ->
+                    zoom = (zoom * z).coerceIn(1f, 5f)
+                    tx += pan.x
+                    ty += pan.y
+                }
+            }
+    ) {
+        Image(
+            bitmap = image,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                scaleX = zoom
+                scaleY = zoom
+                translationX = tx
+                translationY = ty
+            }
+        )
+        Text(
+            "9:41",
+            color = Color.White,
+            fontSize = 64.sp,
+            fontWeight = FontWeight.Light,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 80.dp)
+        )
+        Box(
+            Modifier.align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 110.dp)
+                .clip(RoundedCornerShape(32.dp))
+                .background(Color.White.copy(alpha = 0.2f))
+                .size(width = 300.dp, height = 84.dp)
+        )
+        Column(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "Do ungli se zoom karo, ungli se khiskao",
+                color = Color.White,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(24.dp))
+                        .background(Color(0x88000000))
+                        .clickable { onCancel() }
+                        .padding(horizontal = 28.dp, vertical = 12.dp)
+                ) {
+                    Text("Cancel", color = Color.White, fontSize = 15.sp)
+                }
+                Box(
+                    Modifier.clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xFF0A84FF))
+                        .clickable { onApply(zoom, tx, ty) }
+                        .padding(horizontal = 28.dp, vertical = 12.dp)
+                ) {
+                    Text("Wallpaper lagao", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+            }
         }
     }
 }
@@ -289,6 +403,7 @@ fun AppActionDialog(
     onToggleHidden: () -> Unit,
     onInfo: () -> Unit,
     onUninstall: () -> Unit,
+    onEdit: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var step by remember { mutableStateOf(0) }
@@ -302,6 +417,7 @@ fun AppActionDialog(
             Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
             Spacer(Modifier.height(8.dp))
             if (step == 0) {
+                MenuItem("Icons edit karo (khiskane ke liye)", onEdit)
                 MenuItem(if (inDock) "Dock se hatao" else "Dock me daalo", onDock)
                 MenuItem("Folder me daalo") { step = 1 }
                 if (inFolder) MenuItem("Folder se bahar nikalo", onRemoveFromFolder)

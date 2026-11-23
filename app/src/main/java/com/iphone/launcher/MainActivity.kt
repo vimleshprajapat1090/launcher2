@@ -56,11 +56,13 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,12 +71,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -84,8 +89,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class AppItem(
@@ -101,6 +108,19 @@ sealed interface HomeItem {
     data class FolderEntry(val name: String, val apps: List<AppItem>) : HomeItem
 }
 
+class DropInfo(
+    val index: Int,
+    val merge: Boolean,
+    val edge: Int,
+    val base: Int,
+    val capacity: Int
+)
+
+class FastLongPress(private val base: ViewConfiguration) : ViewConfiguration by base {
+    override val longPressTimeoutMillis: Long
+        get() = 280L
+}
+
 val LIBRARY_ORDER = listOf(
     "Social", "Entertainment", "Productivity", "Creativity", "Games", "Travel", "Utilities"
 )
@@ -114,8 +134,10 @@ class MainActivity : ComponentActivity() {
         AppFont = loadAppFont()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
+            val vc = LocalViewConfiguration.current
             CompositionLocalProvider(
-                LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = AppFont)
+                LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = AppFont),
+                LocalViewConfiguration provides remember(vc) { FastLongPress(vc) }
             ) {
                 LauncherScreen(
                     media = media,
@@ -258,6 +280,7 @@ fun IconGrid(
     rowCount: Int,
     cols: Int,
     iconSize: Dp,
+    screenW: Float,
     editing: Boolean,
     wiggle: State<Float>,
     badges: Map<String, Int>,
@@ -266,7 +289,7 @@ fun IconGrid(
     onRemove: (AppItem) -> Unit,
     onFolder: (String, List<AppItem>) -> Unit,
     onFolderLong: (String) -> Unit,
-    onReorder: (AppItem, Int) -> Unit
+    onReorder: (AppItem, DropInfo) -> Unit
 ) {
     val density = LocalDensity.current
     val cellHpx = with(density) { 100.dp.toPx() }
@@ -295,19 +318,31 @@ fun IconGrid(
                                     editing = editing,
                                     wiggle = if (editing) wiggle else null,
                                     badge = badges[item.app.pkg] ?: 0,
-                                    enableDrag = true,
+                                    enableDrag = editing,
                                     onRemove = { onRemove(item.app) },
                                     onClick = { if (!editing) onLaunch(item.app) },
                                     onLongClick = { onLong(item.app) },
                                     onDrop = { pt ->
                                         val cw = origin[2] / cols
-                                        val col = if (cw > 0f) {
-                                            ((pt.x - origin[0]) / cw).toInt().coerceIn(0, cols - 1)
+                                        val relX = if (cw > 0f) (pt.x - origin[0]) / cw else 0f
+                                        val relY = (pt.y - origin[1]) / cellHpx
+                                        val col = relX.toInt().coerceIn(0, cols - 1)
+                                        val row = relY.toInt().coerceIn(0, rowCount - 1)
+                                        val fx = relX - col
+                                        val fy = relY - row
+                                        val merge = fx in 0.2f..0.8f && fy in 0.05f..0.85f
+                                        val margin = screenW * 0.07f
+                                        val edge = if (pt.x < margin) {
+                                            -1
+                                        } else if (pt.x > screenW - margin) {
+                                            1
                                         } else {
                                             0
                                         }
-                                        val row = ((pt.y - origin[1]) / cellHpx).toInt().coerceIn(0, rowCount - 1)
-                                        onReorder(item.app, baseIndex + row * cols + col)
+                                        onReorder(
+                                            item.app,
+                                            DropInfo(baseIndex + row * cols + col, merge, edge, baseIndex, rowCount * cols)
+                                        )
                                     }
                                 )
                                 is HomeItem.FolderEntry -> FolderIcon(
@@ -335,6 +370,7 @@ fun LauncherScreen(
     onNeedAccess: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("launcher", Context.MODE_PRIVATE) }
     val apps by produceState(initialValue = emptyList<AppItem>(), context) {
         value = withContext(Dispatchers.Default) { loadApps(context) }
@@ -351,15 +387,25 @@ fun LauncherScreen(
     var noHome by remember { mutableStateOf(readList("nohome")) }
     var hidden by remember { mutableStateOf(readList("hidden")) }
     var order by remember { mutableStateOf(readList("order")) }
+    var widgets by remember {
+        mutableStateOf(
+            if (prefs.contains("widgets")) readList("widgets")
+            else listOf("clock", "date", "weather", "battery", "music")
+        )
+    }
+    var dockMax by remember { mutableStateOf(prefs.getInt("dockmax", 4)) }
     var folders by remember { mutableStateOf(parseFolders(prefs.getString("folders", "")!!)) }
     var weatherCity by remember { mutableStateOf(prefs.getString("city", "")!!) }
     var searching by remember { mutableStateOf(false) }
     var showControl by remember { mutableStateOf(false) }
     var showHomeMenu by remember { mutableStateOf(false) }
     var showCityDialog by remember { mutableStateOf(false) }
+    var showWidgetPicker by remember { mutableStateOf(false) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
     var wallVersion by remember { mutableStateOf(0) }
+    var pendingWall by remember { mutableStateOf<Bitmap?>(null) }
+    var pendingPage by remember { mutableStateOf(-1) }
     var dockPos by remember { mutableStateOf(Offset.Zero) }
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var openGroup by remember { mutableStateOf<Pair<String, List<AppItem>>?>(null) }
@@ -371,13 +417,19 @@ fun LauncherScreen(
         value = withContext(Dispatchers.IO) { loadWallpaper(context) }
     }
 
-    val weather by produceState<WeatherInfo?>(initialValue = null, weatherCity) {
+    val weather by produceState<WeatherInfo?>(
+        initialValue = if (weatherCity.isBlank()) null else readCachedWeather(prefs),
+        weatherCity
+    ) {
         while (true) {
             if (weatherCity.isBlank()) {
                 value = null
             } else {
                 val f = withContext(Dispatchers.IO) { fetchWeather(weatherCity) }
-                if (f != null) value = f
+                if (f != null) {
+                    value = f
+                    cacheWeather(prefs, f)
+                }
             }
             delay(30 * 60 * 1000L)
         }
@@ -393,10 +445,13 @@ fun LauncherScreen(
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
-            if (saveWallpaper(context, uri)) {
-                wallVersion += 1
-            } else {
-                Toast.makeText(context, "Wallpaper nahi lag paya", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                val b = withContext(Dispatchers.IO) { decodeForPreview(context, uri) }
+                if (b != null) {
+                    pendingWall = b
+                } else {
+                    Toast.makeText(context, "Photo khul nahi payi", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -411,6 +466,7 @@ fun LauncherScreen(
     }
 
     val dock = dockPkgs.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }
+        .take(dockMax)
         .ifEmpty { visible.take(4) }
     val folderPkgs = folders.flatMap { it.second }.toSet()
     val homeApps = visible
@@ -451,9 +507,9 @@ fun LauncherScreen(
         val cur = dock.map { it.pkg }
         val updated = when {
             app.pkg in cur -> cur - app.pkg
-            cur.size < 4 -> cur + app.pkg
+            cur.size < dockMax -> cur + app.pkg
             else -> {
-                Toast.makeText(context, "Dock full (max 4)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Dock full (max " + dockMax + ")", Toast.LENGTH_SHORT).show()
                 cur
             }
         }
@@ -505,14 +561,42 @@ fun LauncherScreen(
         saveFolders(folders.filter { it.first != name })
     }
 
-    fun reorderApp(app: AppItem, globalIdx: Int) {
+    fun moveApp(app: AppItem, index: Int) {
         if (homeApps.isEmpty()) return
-        val target = (globalIdx - folderEntries.size).coerceIn(0, homeApps.size - 1)
+        val target = (index - folderEntries.size).coerceIn(0, homeApps.size - 1)
         val list = homeApps.map { it.pkg }.toMutableList()
         list.remove(app.pkg)
         list.add(target.coerceAtMost(list.size), app.pkg)
         order = list
         saveList("order", list)
+    }
+
+    fun createFolder(a: AppItem, b: AppItem) {
+        var name = b.category
+        var n = 2
+        while (folders.any { it.first == name }) {
+            name = b.category + " " + n
+            n += 1
+        }
+        saveFolders(folders + (name to listOf(b.pkg, a.pkg)))
+        Toast.makeText(context, "Folder bana: " + name, Toast.LENGTH_SHORT).show()
+    }
+
+    fun handleDrop(app: AppItem, d: DropInfo) {
+        if (d.edge != 0) {
+            val target = if (d.edge > 0) d.base + d.capacity else (d.base - 1).coerceAtLeast(0)
+            moveApp(app, target)
+            pendingPage = d.base / d.capacity + 1 + d.edge
+            return
+        }
+        val targetItem = items.getOrNull(d.index)
+        if (d.merge && targetItem is HomeItem.AppEntry && targetItem.app.pkg != app.pkg) {
+            createFolder(app, targetItem.app)
+        } else if (d.merge && targetItem is HomeItem.FolderEntry) {
+            moveToFolder(app.pkg, targetItem.name)
+        } else {
+            moveApp(app, d.index)
+        }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -521,12 +605,21 @@ fun LauncherScreen(
         val isTablet = maxWidth > 600.dp
         val cols = if (isTablet) 6 else 4
         val iconSize = if (isTablet) 66.dp else 60.dp
-        val rows = ((maxHeight.value - 310f) / 100f).toInt().coerceIn(2, 8)
-        val firstRows = (rows - 2).coerceAtLeast(0)
-        val firstCount = cols * firstRows
-        val pages: List<List<HomeItem>> =
-            listOf(items.take(firstCount)) + items.drop(firstCount).chunked(cols * rows)
-        val pagerState = rememberPagerState(pageCount = { pages.size + 1 })
+        val rows = ((maxHeight.value - 290f) / 100f).toInt().coerceIn(2, 8)
+        val capacity = cols * rows
+        val pages: List<List<HomeItem>> = items.chunked(capacity).ifEmpty { listOf(emptyList()) }
+        val pagerState = rememberPagerState(initialPage = 1, pageCount = { pages.size + 2 })
+
+        val dockCount = dock.size.coerceAtLeast(1)
+        val dockIcon = minOf(iconSize.value, (maxWidth.value - 64f - 14f * (dockCount - 1)) / dockCount)
+            .coerceAtLeast(36f).dp
+
+        LaunchedEffect(pendingPage) {
+            if (pendingPage >= 0) {
+                pagerState.animateScrollToPage(pendingPage.coerceIn(1, pages.size))
+                pendingPage = -1
+            }
+        }
 
         CompositionLocalProvider(LocalFrost provides FrostInfo(wallpaper?.blurred, screenW, screenH)) {
             wallpaper?.let { w ->
@@ -534,7 +627,14 @@ fun LauncherScreen(
                     bitmap = w.full,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        val count = pagerState.pageCount
+                        val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                        val frac = if (count > 1) pos / (count - 1) - 0.5f else 0f
+                        scaleX = 1.12f
+                        scaleY = 1.12f
+                        translationX = -frac * size.width * 0.10f
+                    }
                 )
             }
 
@@ -542,55 +642,68 @@ fun LauncherScreen(
                 Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 44.dp)
             ) {
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
-                    if (page < pages.size) {
-                        Column(
-                            Modifier.fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectTapGestures(onDoubleTap = { lockScreen(context) })
-                                }
-                                .pointerInput(Unit) {
-                                    var total = 0f
-                                    detectVerticalDragGestures(
-                                        onDragStart = { total = 0f },
-                                        onDragEnd = { if (total > 140f) searching = true },
-                                        onDragCancel = { total = 0f },
-                                        onVerticalDrag = { _, amount -> total += amount }
-                                    )
-                                }
-                                .padding(top = 8.dp, start = 12.dp, end = 12.dp)
-                        ) {
-                            if (page == 0) {
-                                Box(Modifier.fillMaxWidth().height(170.dp)) {
-                                    ClockWidgets(
-                                        onLongPress = { showHomeMenu = true },
-                                        weather = weather,
-                                        battery = battery
-                                    )
-                                }
+                    Box(
+                        Modifier.fillMaxSize().graphicsLayer {
+                            val off = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+                            val a = abs(off).coerceIn(0f, 1f)
+                            alpha = 1f - 0.45f * a
+                            scaleX = 1f - 0.1f * a
+                            scaleY = 1f - 0.1f * a
+                            translationX = off * size.width * 0.25f
+                        }
+                    ) {
+                        if (page == 0) {
+                            TodayPage(
+                                selected = widgets,
+                                weather = weather,
+                                battery = battery,
+                                media = media,
+                                onWeatherClick = { showCityDialog = true },
+                                onLongPress = { showHomeMenu = true }
+                            )
+                        } else if (page <= pages.size) {
+                            val pageIndex = page - 1
+                            Column(
+                                Modifier.fillMaxSize()
+                                    .pointerInput(Unit) {
+                                        detectTapGestures(onDoubleTap = { lockScreen(context) })
+                                    }
+                                    .pointerInput(Unit) {
+                                        var total = 0f
+                                        detectVerticalDragGestures(
+                                            onDragStart = { total = 0f },
+                                            onDragEnd = { if (total > 140f) searching = true },
+                                            onDragCancel = { total = 0f },
+                                            onVerticalDrag = { _, amount -> total += amount }
+                                        )
+                                    }
+                                    .padding(top = 8.dp, start = 12.dp, end = 12.dp)
+                            ) {
+                                IconGrid(
+                                    items = pages[pageIndex],
+                                    baseIndex = pageIndex * capacity,
+                                    rowCount = rows,
+                                    cols = cols,
+                                    iconSize = iconSize,
+                                    screenW = screenW,
+                                    editing = editing,
+                                    wiggle = wiggle,
+                                    badges = badges,
+                                    onLaunch = launch,
+                                    onLong = { app -> menuApp = app },
+                                    onRemove = { app -> toggleHome(app.pkg) },
+                                    onFolder = { name, list -> openGroup = name to list },
+                                    onFolderLong = { name -> folderMenu = name },
+                                    onReorder = { app, d -> handleDrop(app, d) }
+                                )
                             }
-                            IconGrid(
-                                items = pages[page],
-                                baseIndex = if (page == 0) 0 else firstCount + (page - 1) * cols * rows,
-                                rowCount = if (page == 0) firstRows else rows,
-                                cols = cols,
-                                iconSize = iconSize,
-                                editing = editing,
-                                wiggle = wiggle,
-                                badges = badges,
-                                onLaunch = launch,
-                                onLong = { app -> menuApp = app },
-                                onRemove = { app -> toggleHome(app.pkg) },
-                                onFolder = { name, list -> openGroup = name to list },
-                                onFolderLong = { name -> folderMenu = name },
-                                onReorder = { app, idx -> reorderApp(app, idx) }
+                        } else {
+                            LibraryPage(
+                                apps = visible,
+                                onSearch = { searching = true },
+                                onOpen = { name, list -> openGroup = name to list }
                             )
                         }
-                    } else {
-                        LibraryPage(
-                            apps = visible,
-                            onSearch = { searching = true },
-                            onOpen = { name, list -> openGroup = name to list }
-                        )
                     }
                 }
 
@@ -641,13 +754,13 @@ fun LauncherScreen(
                                 Color.White.copy(alpha = if (wallpaper != null) 0.14f else 0.22f)
                             )
                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         dock.forEach { app ->
                             AppIcon(
                                 app = app,
-                                size = iconSize,
+                                size = dockIcon,
                                 showLabel = false,
                                 badge = badges[app.pkg] ?: 0,
                                 onClick = { if (!editing) launch(app) },
@@ -715,6 +828,7 @@ fun LauncherScreen(
                     hasWallpaper = wallpaper != null,
                     lockReady = isLockReady(context),
                     weatherCity = weatherCity,
+                    dockMax = dockMax,
                     onWallpaper = {
                         showHomeMenu = false
                         picker.launch("image/*")
@@ -753,6 +867,15 @@ fun LauncherScreen(
                         showHomeMenu = false
                         showCityDialog = true
                     },
+                    onWidgets = {
+                        showHomeMenu = false
+                        showWidgetPicker = true
+                    },
+                    onDockSize = {
+                        val n = if (dockMax >= 6) 4 else dockMax + 1
+                        dockMax = n
+                        prefs.edit().putInt("dockmax", n).apply()
+                    },
                     onResetLayout = {
                         order = emptyList()
                         noHome = emptyList()
@@ -770,6 +893,18 @@ fun LauncherScreen(
                         }
                     },
                     onDismiss = { showHomeMenu = false }
+                )
+            }
+
+            if (showWidgetPicker) {
+                WidgetPickerDialog(
+                    selected = widgets,
+                    onToggle = { id ->
+                        val u = if (id in widgets) widgets - id else widgets + id
+                        widgets = u
+                        saveList("widgets", u)
+                    },
+                    onDismiss = { showWidgetPicker = false }
                 )
             }
 
@@ -849,12 +984,40 @@ fun LauncherScreen(
                             Toast.makeText(context, "Uninstall nahi khula", Toast.LENGTH_SHORT).show()
                         }
                     },
+                    onEdit = {
+                        menuApp = null
+                        openGroup = null
+                        editing = true
+                    },
                     onDismiss = { menuApp = null }
                 )
             }
 
             if (showControl) {
                 ControlCenter(media = media, onClose = { showControl = false })
+            }
+
+            pendingWall?.let { bmp ->
+                WallpaperPreview(
+                    image = remember(bmp) { bmp.asImageBitmap() },
+                    onApply = { z, x, y ->
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                saveWallpaperBitmap(
+                                    context,
+                                    renderWallpaper(bmp, screenW.toInt(), screenH.toInt(), z, x, y)
+                                )
+                            }
+                            if (ok) {
+                                wallVersion += 1
+                            } else {
+                                Toast.makeText(context, "Wallpaper nahi lag paya", Toast.LENGTH_SHORT).show()
+                            }
+                            pendingWall = null
+                        }
+                    },
+                    onCancel = { pendingWall = null }
+                )
             }
 
             Box(

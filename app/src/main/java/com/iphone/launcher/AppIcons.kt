@@ -7,9 +7,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -295,25 +296,27 @@ fun IosIcon(kind: Int, modifier: Modifier) {
 @Composable
 fun IconImage(app: AppItem, modifier: Modifier) {
     val kind = remember(app.pkg) { iosKind(app.pkg) }
-    if (kind != 0) {
-        IosIcon(kind, modifier)
-    } else if (app.opaque) {
-        Box(modifier.clip(IconShape)) {
+    Box(modifier.clip(IconShape)) {
+        if (kind != 0) {
+            IosIcon(kind, Modifier.fillMaxSize())
+        } else if (app.opaque) {
             Image(
                 bitmap = app.icon,
                 contentDescription = app.label,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+        } else {
+            Box(Modifier.fillMaxSize().background(Color(0xFFF2F2F7)).padding(6.dp)) {
+                Image(bitmap = app.icon, contentDescription = app.label, modifier = Modifier.fillMaxSize())
+            }
         }
-    } else {
         Box(
-            modifier.clip(IconShape)
-                .background(Color(0xFFF2F2F7))
-                .padding(6.dp)
-        ) {
-            Image(bitmap = app.icon, contentDescription = app.label, modifier = Modifier.fillMaxSize())
-        }
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.Transparent))
+            )
+        )
+        Box(Modifier.matchParentSize().border(0.5.dp, Color.White.copy(alpha = 0.2f), IconShape))
     }
 }
 
@@ -383,7 +386,7 @@ fun AppIcon(
             }
             .pointerInput(enableDrag) {
                 if (enableDrag) {
-                    detectDragGesturesAfterLongPress(
+                    detectDragGestures(
                         onDragStart = {
                             val b = boundsHolder[0]
                             startCenter = if (b != null) b.center else Offset.Zero
@@ -400,7 +403,7 @@ fun AppIcon(
                             val drop = startCenter + dragOffset
                             dragging = false
                             dragOffset = Offset.Zero
-                            if (moved < 14f) onLongClick() else onDrop(drop)
+                            if (moved >= 14f) onDrop(drop)
                         },
                         onDragCancel = {
                             dragging = false

@@ -7,6 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.runtime.compositionLocalOf
@@ -147,4 +150,47 @@ fun Modifier.frostedAuto(tint: Color, fallback: Color): Modifier = composed {
             pos,
             if (info?.blurred != null) tint else fallback
         )
+}
+
+fun decodeForPreview(context: Context, uri: Uri): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        var sample = 1
+        while (bounds.outWidth / sample > 2200 || bounds.outHeight / sample > 2200) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun renderWallpaper(src: Bitmap, sw: Int, sh: Int, zoom: Float, tx: Float, ty: Float): Bitmap {
+    val out = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(out)
+    val s0 = maxOf(sw.toFloat() / src.width, sh.toFloat() / src.height)
+    val m = Matrix()
+    m.postScale(s0, s0)
+    m.postTranslate((sw - src.width * s0) / 2f, (sh - src.height * s0) / 2f)
+    m.postScale(zoom, zoom, sw / 2f, sh / 2f)
+    m.postTranslate(tx, ty)
+    canvas.drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG))
+    return out
+}
+
+fun saveWallpaperBitmap(context: Context, bmp: Bitmap): Boolean {
+    return try {
+        File(context.filesDir, "wallpaper.jpg").outputStream().use {
+            bmp.compress(Bitmap.CompressFormat.JPEG, 92, it)
+        }
+        true
+    } catch (e: Exception) {
+        false
+    }
 }
