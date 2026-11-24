@@ -5,6 +5,7 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -30,6 +31,7 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import java.io.File
+import org.json.JSONObject
 
 class LockAdmin : DeviceAdminReceiver()
 
@@ -189,6 +191,62 @@ fun saveWallpaperBitmap(context: Context, bmp: Bitmap): Boolean {
         File(context.filesDir, "wallpaper.jpg").outputStream().use {
             bmp.compress(Bitmap.CompressFormat.JPEG, 92, it)
         }
+        true
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun setLockWallpaper(context: Context, bmp: Bitmap): Boolean {
+    return try {
+        val wm = android.app.WallpaperManager.getInstance(context)
+        wm.setBitmap(bmp, null, true, android.app.WallpaperManager.FLAG_LOCK)
+        true
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun exportPrefs(context: Context, prefs: SharedPreferences, uri: Uri): Boolean {
+    return try {
+        val obj = JSONObject()
+        for ((k, v) in prefs.all) {
+            if (v is String || v is Int || v is Boolean || v is Long || v is Float) {
+                obj.put(k, v)
+            }
+        }
+        context.contentResolver.openOutputStream(uri)?.use {
+            it.write(obj.toString().toByteArray())
+        }
+        true
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun importPrefs(context: Context, prefs: SharedPreferences, uri: Uri): Boolean {
+    return try {
+        val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            ?: return false
+        val obj = JSONObject(text)
+        val e = prefs.edit()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val v = obj.get(k)
+            if (v is String) {
+                e.putString(k, v)
+            } else if (v is Int) {
+                e.putInt(k, v)
+            } else if (v is Boolean) {
+                e.putBoolean(k, v)
+            } else if (v is Long) {
+                e.putLong(k, v)
+            } else if (v is Double) {
+                e.putFloat(k, v.toFloat())
+            }
+        }
+        e.apply()
         true
     } catch (e: Exception) {
         false

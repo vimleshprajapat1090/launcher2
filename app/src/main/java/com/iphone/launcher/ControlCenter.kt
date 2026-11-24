@@ -7,6 +7,7 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -155,6 +156,7 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
     var asked by remember { mutableStateOf(false) }
     var torch by remember { mutableStateOf(false) }
     var rotateOn by remember { mutableStateOf(readAutoRotate(context)) }
+    var timeout by remember { mutableStateOf(readTimeout(context)) }
     val wifiOn = remember { readWifiOn(context) }
     val btOn = remember { readGlobal(context, "bluetooth_on") }
     val airOn = remember { readGlobal(context, Settings.Global.AIRPLANE_MODE_ON) }
@@ -254,6 +256,48 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CCCard(Modifier.size(90.dp)) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CCCircle("Camera", false) { openCamera(context) }
+                    }
+                }
+                CCCard(Modifier.size(90.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CCCircle("Calc", false) { openCalculator(context) }
+                    }
+                }
+            }
+            CCCard(Modifier.fillMaxWidth().height(90.dp)) {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("Screen timeout", color = Color.White, fontSize = 12.sp)
+                    Row(
+                        Modifier.padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(15000 to "15s", 30000 to "30s", 60000 to "1m", 300000 to "5m").forEach { opt ->
+                            TimeoutChip(opt.second, timeout == opt.first) {
+                                if (Settings.System.canWrite(context)) {
+                                    try {
+                                        Settings.System.putInt(
+                                            context.contentResolver,
+                                            Settings.System.SCREEN_OFF_TIMEOUT,
+                                            opt.first
+                                        )
+                                        timeout = opt.first
+                                    } catch (e: Exception) {
+                                    }
+                                } else {
+                                    openWriteSettings(context)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CCCard(Modifier.size(90.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CCCircle("Torch", torch) {
                             try {
                                 val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -315,5 +359,41 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+fun readTimeout(context: Context): Int {
+    return try {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 60000)
+    } catch (e: Exception) {
+        60000
+    }
+}
+
+fun openCamera(context: Context) {
+    try {
+        context.startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Camera nahi khula", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun openCalculator(context: Context) {
+    try {
+        context.startActivity(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALCULATOR))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Calculator nahi mila", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+fun TimeoutChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(14.dp))
+            .background(if (selected) Color(0xFF0A84FF) else Color(0x55FFFFFF))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }

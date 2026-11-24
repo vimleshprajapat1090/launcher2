@@ -53,15 +53,17 @@ fun WidgetCard(modifier: Modifier, content: @Composable () -> Unit) {
     }
 }
 
+class WidgetData(
+    val time: String,
+    val ampm: String,
+    val weekday: String,
+    val dayNum: String,
+    val month: String,
+    val full: String
+)
+
 @Composable
-fun TodayPage(
-    selected: List<String>,
-    weather: WeatherInfo?,
-    battery: Int,
-    media: MediaWatcher,
-    onWeatherClick: () -> Unit,
-    onLongPress: () -> Unit
-) {
+fun rememberWidgetData(): WidgetData {
     val context = LocalContext.current
     val is24 = DateFormat.is24HourFormat(context)
     val now by produceState(initialValue = System.currentTimeMillis()) {
@@ -72,13 +74,83 @@ fun TodayPage(
     }
     val date = Date(now)
     val loc = Locale.getDefault()
-    val time = SimpleDateFormat(if (is24) "H:mm" else "h:mm", loc).format(date)
-    val ampm = if (is24) "" else SimpleDateFormat("a", loc).format(date).uppercase()
-    val weekday = SimpleDateFormat("EEEE", loc).format(date)
-    val dayNum = SimpleDateFormat("d", loc).format(date)
-    val month = SimpleDateFormat("MMMM", loc).format(date)
-    val full = SimpleDateFormat("EEEE, d MMMM", loc).format(date)
+    return WidgetData(
+        time = SimpleDateFormat(if (is24) "H:mm" else "h:mm", loc).format(date),
+        ampm = if (is24) "" else SimpleDateFormat("a", loc).format(date).uppercase(),
+        weekday = SimpleDateFormat("EEEE", loc).format(date),
+        dayNum = SimpleDateFormat("d", loc).format(date),
+        month = SimpleDateFormat("MMMM", loc).format(date),
+        full = SimpleDateFormat("EEEE, d MMMM", loc).format(date)
+    )
+}
 
+@Composable
+fun WidgetRow(
+    ids: List<String>,
+    data: WidgetData,
+    weather: WeatherInfo?,
+    battery: Int,
+    media: MediaWatcher,
+    onWeatherClick: () -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        ids.forEach { id ->
+            WidgetCard(Modifier.weight(1f).height(160.dp)) {
+                WidgetBody(
+                    id = id,
+                    time = data.time,
+                    ampm = data.ampm,
+                    weekday = data.weekday,
+                    dayNum = data.dayNum,
+                    month = data.month,
+                    weather = weather,
+                    battery = battery,
+                    media = media,
+                    onWeatherClick = onWeatherClick
+                )
+            }
+        }
+        if (ids.size == 1) {
+            Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+fun HomeWidgets(
+    selected: List<String>,
+    weather: WeatherInfo?,
+    battery: Int,
+    media: MediaWatcher,
+    onWeatherClick: () -> Unit,
+    onLongPress: () -> Unit
+) {
+    val data = rememberWidgetData()
+    val ids = WIDGET_CATALOG.map { it.first }.filter { it in selected }.take(2)
+    Box(
+        Modifier.fillMaxWidth()
+            .height(170.dp)
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+                onLongClick = onLongPress
+            )
+    ) {
+        WidgetRow(ids, data, weather, battery, media, onWeatherClick)
+    }
+}
+
+@Composable
+fun TodayPage(
+    selected: List<String>,
+    weather: WeatherInfo?,
+    battery: Int,
+    media: MediaWatcher,
+    onWeatherClick: () -> Unit,
+    onLongPress: () -> Unit
+) {
+    val data = rememberWidgetData()
     val ids = WIDGET_CATALOG.map { it.first }.filter { it in selected }
 
     Column(
@@ -94,7 +166,7 @@ fun TodayPage(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("Today", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Text(full, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+        Text(data.full, color = Color(0xFFB0B0B5), fontSize = 14.sp)
         if (ids.isEmpty()) {
             Text(
                 "Koi widget nahi hai. Yahan long-press karke Widgets chuno dabao.",
@@ -103,27 +175,7 @@ fun TodayPage(
             )
         }
         ids.chunked(2).forEach { rowIds ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                rowIds.forEach { id ->
-                    WidgetCard(Modifier.weight(1f).height(160.dp)) {
-                        WidgetBody(
-                            id = id,
-                            time = time,
-                            ampm = ampm,
-                            weekday = weekday,
-                            dayNum = dayNum,
-                            month = month,
-                            weather = weather,
-                            battery = battery,
-                            media = media,
-                            onWeatherClick = onWeatherClick
-                        )
-                    }
-                }
-                if (rowIds.size == 1) {
-                    Spacer(Modifier.weight(1f))
-                }
-            }
+            WidgetRow(rowIds, data, weather, battery, media, onWeatherClick)
         }
     }
 }

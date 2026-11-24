@@ -102,6 +102,14 @@ fun iosKind(pkg: String): Int {
         p.contains("photos") || p.contains("gallery") -> 10
         p == "com.google.android.gm" -> 11
         p.contains(".notes") || p == "com.google.android.keep" -> 12
+        p == "com.instagram.android" -> 13
+        p == "com.facebook.katana" -> 14
+        p.contains("telegram") -> 15
+        p == "com.spotify.music" -> 16
+        p == "com.android.vending" -> 17
+        p == "com.google.android.apps.maps" -> 18
+        p.contains("contacts") -> 19
+        p.contains("calendar") -> 20
         else -> 0
     }
 }
@@ -288,8 +296,129 @@ fun IosIcon(kind: Int, modifier: Modifier) {
                     drawLine(Color(0xFFD1D1D6), Offset(w * 0.15f, y), Offset(w * 0.85f, y), strokeWidth = w * 0.02f)
                 }
             }
+            13 -> {
+                drawRect(
+                    Brush.linearGradient(
+                        listOf(Color(0xFF833AB4), Color(0xFFFD1D1D), Color(0xFFFCB045)),
+                        start = Offset(0f, h),
+                        end = Offset(w, 0f)
+                    )
+                )
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(w * 0.22f, h * 0.22f),
+                    size = Size(w * 0.56f, h * 0.56f),
+                    cornerRadius = CornerRadius(w * 0.16f),
+                    style = Stroke(width = w * 0.05f)
+                )
+                drawCircle(Color.White, w * 0.13f, c, style = Stroke(width = w * 0.05f))
+                drawCircle(Color.White, w * 0.03f, Offset(w * 0.66f, h * 0.34f))
+            }
+            14 -> {
+                drawRect(Color(0xFF1877F2))
+                drawLine(Color.White, Offset(w * 0.56f, h * 0.88f), Offset(w * 0.56f, h * 0.4f), strokeWidth = w * 0.1f, cap = StrokeCap.Round)
+                drawArc(
+                    color = Color.White,
+                    startAngle = 180f,
+                    sweepAngle = 100f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.56f, h * 0.2f),
+                    size = Size(w * 0.24f, h * 0.4f),
+                    style = Stroke(width = w * 0.1f, cap = StrokeCap.Round)
+                )
+                drawLine(Color.White, Offset(w * 0.4f, h * 0.52f), Offset(w * 0.74f, h * 0.52f), strokeWidth = w * 0.09f, cap = StrokeCap.Round)
+            }
+            15 -> {
+                drawRect(Brush.verticalGradient(listOf(Color(0xFF37AEE2), Color(0xFF1E96C8))))
+                val plane = Path().apply {
+                    moveTo(w * 0.2f, h * 0.48f)
+                    lineTo(w * 0.8f, h * 0.24f)
+                    lineTo(w * 0.62f, h * 0.78f)
+                    lineTo(w * 0.48f, h * 0.6f)
+                    lineTo(w * 0.38f, h * 0.7f)
+                    lineTo(w * 0.38f, h * 0.56f)
+                    close()
+                }
+                drawPath(plane, Color.White)
+            }
+            16 -> {
+                drawRect(Color(0xFF1ED760))
+                for (i in 0 until 3) {
+                    val r = w * (0.15f + 0.08f * i)
+                    drawArc(
+                        color = Color.Black,
+                        startAngle = 215f,
+                        sweepAngle = 110f,
+                        useCenter = false,
+                        topLeft = Offset(w * 0.5f - r, h * 0.66f - r),
+                        size = Size(r * 2f, r * 2f),
+                        style = Stroke(width = w * 0.06f, cap = StrokeCap.Round)
+                    )
+                }
+            }
+            17 -> {
+                drawRect(Color.White)
+                val a = Offset(w * 0.28f, h * 0.22f)
+                val b = Offset(w * 0.28f, h * 0.78f)
+                val tip = Offset(w * 0.78f, h * 0.5f)
+                val mid = Offset(w * 0.5f, h * 0.5f)
+                fun tri(p1: Offset, p2: Offset, p3: Offset, col: Color) {
+                    val path = Path().apply {
+                        moveTo(p1.x, p1.y)
+                        lineTo(p2.x, p2.y)
+                        lineTo(p3.x, p3.y)
+                        close()
+                    }
+                    drawPath(path, col)
+                }
+                tri(a, b, mid, Color(0xFF00A0FF))
+                tri(a, tip, mid, Color(0xFF00E676))
+                tri(b, tip, mid, Color(0xFFFF3D00))
+                tri(Offset(w * 0.62f, h * 0.4f), Offset(w * 0.62f, h * 0.6f), tip, Color(0xFFFFD600))
+            }
+            18 -> {
+                drawRect(Brush.verticalGradient(listOf(Color(0xFFEFF3F8), Color(0xFFD6E4F0))))
+                drawLine(Color(0xFFFFC107), Offset(0f, h * 0.8f), Offset(w, h * 0.3f), strokeWidth = w * 0.08f)
+                drawLine(Color.White, Offset(0f, h * 0.35f), Offset(w, h * 0.7f), strokeWidth = w * 0.06f)
+                drawCircle(Color(0xFFEA4335), w * 0.16f, Offset(w * 0.5f, h * 0.4f))
+                val pin = Path().apply {
+                    moveTo(w * 0.36f, h * 0.48f)
+                    lineTo(w * 0.64f, h * 0.48f)
+                    lineTo(w * 0.5f, h * 0.78f)
+                    close()
+                }
+                drawPath(pin, Color(0xFFEA4335))
+                drawCircle(Color.White, w * 0.06f, Offset(w * 0.5f, h * 0.4f))
+            }
+            19 -> {
+                drawRect(Brush.verticalGradient(listOf(Color(0xFFB0B0B5), Color(0xFF8E8E93))))
+                drawCircle(Color.White, w * 0.14f, Offset(w * 0.5f, h * 0.38f))
+                drawArc(
+                    color = Color.White,
+                    startAngle = 180f,
+                    sweepAngle = 180f,
+                    useCenter = true,
+                    topLeft = Offset(w * 0.26f, h * 0.58f),
+                    size = Size(w * 0.48f, h * 0.5f)
+                )
+            }
             else -> drawRect(Color.Gray)
         }
+    }
+}
+
+@Composable
+fun CalendarIcon(modifier: Modifier) {
+    val cal = java.util.Calendar.getInstance()
+    val day = cal.get(java.util.Calendar.DAY_OF_MONTH).toString()
+    val wd = java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(cal.time).uppercase()
+    Column(
+        modifier.background(Color.White),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(wd, color = Color(0xFFFF3B30), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Text(day, color = Color.Black, fontSize = 30.sp, fontWeight = FontWeight.Light)
     }
 }
 
@@ -297,7 +426,9 @@ fun IosIcon(kind: Int, modifier: Modifier) {
 fun IconImage(app: AppItem, modifier: Modifier) {
     val kind = remember(app.pkg) { iosKind(app.pkg) }
     Box(modifier.clip(IconShape)) {
-        if (kind != 0) {
+        if (kind == 20) {
+            CalendarIcon(Modifier.fillMaxSize())
+        } else if (kind != 0) {
             IosIcon(kind, Modifier.fillMaxSize())
         } else if (app.opaque) {
             Image(

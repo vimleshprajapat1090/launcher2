@@ -25,9 +25,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
@@ -59,60 +62,115 @@ import androidx.compose.ui.window.Dialog
 fun LibraryPage(
     apps: List<AppItem>,
     onSearch: () -> Unit,
-    onOpen: (String, List<AppItem>) -> Unit
+    onOpen: (String, List<AppItem>) -> Unit,
+    onLaunch: (AppItem) -> Unit,
+    onLong: (AppItem) -> Unit
 ) {
+    var mode by remember { mutableStateOf(0) }
+    val recent = apps.sortedByDescending { it.installed }.take(12)
     val groups = LIBRARY_ORDER.mapNotNull { cat ->
         val list = apps.filter { it.category == cat }
         if (list.isEmpty()) null else cat to list
     }
+    val all = if (recent.isEmpty()) groups else listOf("Recently added" to recent) + groups
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Box(
-            Modifier.fillMaxWidth()
-                .padding(vertical = 8.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.25f))
-                .clickable { onSearch() }
-                .padding(horizontal = 16.dp, vertical = 10.dp)
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("App Library", color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp)
+            Box(
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.White.copy(alpha = 0.25f))
+                    .clickable { onSearch() }
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Text("App Library", color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp)
+            }
+            Box(
+                Modifier.clip(RoundedCornerShape(14.dp))
+                    .background(if (mode == 0) Color(0xFF0A84FF) else Color.White.copy(alpha = 0.25f))
+                    .clickable { mode = 0 }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text("Boxes", color = Color.White, fontSize = 13.sp)
+            }
+            Box(
+                Modifier.clip(RoundedCornerShape(14.dp))
+                    .background(if (mode == 1) Color(0xFF0A84FF) else Color.White.copy(alpha = 0.25f))
+                    .clickable { mode = 1 }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text("A-Z", color = Color.White, fontSize = 13.sp)
+            }
         }
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 170.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(groups) { group ->
-                val name = group.first
-                val list = group.second
-                Column(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        Modifier.size(150.dp)
-                            .clip(RoundedCornerShape(30.dp))
-                            .background(Color.White.copy(alpha = 0.22f))
-                            .clickable { onOpen(name, list) }
-                            .padding(10.dp)
+        if (mode == 0) {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 170.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(all) { group ->
+                    val name = group.first
+                    val list = group.second
+                    Column(
+                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
-                            for (r in 0 until 2) {
-                                Row(
-                                    Modifier.fillMaxWidth().weight(1f),
-                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    for (c in 0 until 2) {
-                                        val a = list.getOrNull(r * 2 + c)
-                                        Box(Modifier.weight(1f).aspectRatio(1f).padding(4.dp)) {
-                                            if (a != null) IconImage(a, Modifier.fillMaxSize())
+                        Box(
+                            Modifier.size(150.dp)
+                                .clip(RoundedCornerShape(30.dp))
+                                .background(Color.White.copy(alpha = 0.22f))
+                                .clickable { onOpen(name, list) }
+                                .padding(10.dp)
+                        ) {
+                            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
+                                for (r in 0 until 2) {
+                                    Row(
+                                        Modifier.fillMaxWidth().weight(1f),
+                                        horizontalArrangement = Arrangement.SpaceEvenly,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        for (c in 0 until 2) {
+                                            val a2 = list.getOrNull(r * 2 + c)
+                                            Box(Modifier.weight(1f).aspectRatio(1f).padding(4.dp)) {
+                                                if (a2 != null) IconImage(a2, Modifier.fillMaxSize())
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        Text(name, style = labelStyle, modifier = Modifier.padding(top = 6.dp))
                     }
-                    Text(name, style = labelStyle, modifier = Modifier.padding(top = 6.dp))
+                }
+            }
+        } else {
+            val sorted = apps.sortedBy { it.label.lowercase() }
+            val byLetter = sorted.groupBy {
+                val ch = it.label.trim().take(1).uppercase()
+                if (ch.isNotEmpty() && ch[0].isLetter()) ch else "#"
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 90.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                byLetter.forEach { entry ->
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            entry.key,
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp, start = 8.dp)
+                        )
+                    }
+                    items(entry.value) { app ->
+                        Box(Modifier.padding(vertical = 6.dp), contentAlignment = Alignment.TopCenter) {
+                            AppIcon(app = app, onClick = { onLaunch(app) }, onLongClick = { onLong(app) })
+                        }
+                    }
                 }
             }
         }
@@ -192,6 +250,9 @@ fun HomeMenuDialog(
     lockReady: Boolean,
     weatherCity: String,
     dockMax: Int,
+    homeWidgets: Boolean,
+    showLabels: Boolean,
+    sizeLabel: String,
     onWallpaper: () -> Unit,
     onResetWallpaper: () -> Unit,
     onEdit: () -> Unit,
@@ -199,7 +260,12 @@ fun HomeMenuDialog(
     onLockSetup: () -> Unit,
     onWeather: () -> Unit,
     onWidgets: () -> Unit,
+    onHomeWidgets: () -> Unit,
+    onLabels: () -> Unit,
+    onIconSize: () -> Unit,
     onDockSize: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
     onResetLayout: () -> Unit,
     onDefaultHome: () -> Unit,
     onDismiss: () -> Unit
@@ -208,6 +274,8 @@ fun HomeMenuDialog(
         Column(
             Modifier.clip(RoundedCornerShape(24.dp))
                 .background(Color(0xF22C2C2E))
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp)
         ) {
             Text("Home Screen", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -215,17 +283,22 @@ fun HomeMenuDialog(
             MenuItem("Icons edit karo (khiskane ke liye)", onEdit)
             MenuItem("Wallpaper chuno (gallery se)", onWallpaper)
             if (hasWallpaper) MenuItem("Default wallpaper pe wapas", onResetWallpaper)
-            MenuItem("Widgets chuno", onWidgets)
+            MenuItem("Widgets chuno (Today page)", onWidgets)
+            MenuItem("Widgets home page pe bhi: " + (if (homeWidgets) "ON" else "OFF"), onHomeWidgets)
             MenuItem(
                 if (weatherCity.isBlank()) "Weather ka sheher set karo" else "Weather sheher: " + weatherCity,
                 onWeather
             )
+            MenuItem("Icon size: " + sizeLabel + " (badlo)", onIconSize)
+            MenuItem("App ke naam: " + (if (showLabels) "ON" else "OFF"), onLabels)
             MenuItem("Dock me max apps: " + dockMax + " (badlo)", onDockSize)
             if (hasHidden) MenuItem("Hidden apps dekho (PIN lagega)", onHidden)
             MenuItem(
                 if (lockReady) "Double-tap lock: chalu hai" else "Double-tap lock chalu karo",
                 onLockSetup
             )
+            MenuItem("Layout backup (file me save)", onBackup)
+            MenuItem("Layout restore (file se)", onRestore)
             MenuItem("Home layout reset (order, folders)", onResetLayout)
             MenuItem("Default launcher settings", onDefaultHome)
         }
@@ -259,6 +332,7 @@ fun WidgetPickerDialog(
 fun WallpaperPreview(
     image: ImageBitmap,
     onApply: (Float, Float, Float) -> Unit,
+    onApplyLock: (Float, Float, Float) -> Unit,
     onCancel: () -> Unit
 ) {
     var zoom by remember { mutableStateOf(1f) }
@@ -317,17 +391,25 @@ fun WallpaperPreview(
                     Modifier.clip(RoundedCornerShape(24.dp))
                         .background(Color(0x88000000))
                         .clickable { onCancel() }
-                        .padding(horizontal = 28.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Text("Cancel", color = Color.White, fontSize = 15.sp)
                 }
                 Box(
                     Modifier.clip(RoundedCornerShape(24.dp))
+                        .background(Color(0x88000000))
+                        .clickable { onApplyLock(zoom, tx, ty) }
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    Text("Lock screen pe", color = Color.White, fontSize = 15.sp)
+                }
+                Box(
+                    Modifier.clip(RoundedCornerShape(24.dp))
                         .background(Color(0xFF0A84FF))
                         .clickable { onApply(zoom, tx, ty) }
-                        .padding(horizontal = 28.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
-                    Text("Wallpaper lagao", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("Home pe lagao", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -395,12 +477,14 @@ fun AppActionDialog(
     inFolder: Boolean,
     inNoHome: Boolean,
     isHidden: Boolean,
+    isLocked: Boolean,
     folderNames: List<String>,
     onDock: () -> Unit,
     onAddToFolder: (String) -> Unit,
     onRemoveFromFolder: () -> Unit,
     onToggleHome: () -> Unit,
     onToggleHidden: () -> Unit,
+    onToggleLock: () -> Unit,
     onInfo: () -> Unit,
     onUninstall: () -> Unit,
     onEdit: () -> Unit,
@@ -426,6 +510,7 @@ fun AppActionDialog(
                     onToggleHome
                 )
                 MenuItem(if (isHidden) "Hidden se wapas lao" else "App chhupao (Hide)", onToggleHidden)
+                MenuItem(if (isLocked) "App lock band karo" else "App lock lagao (PIN/fingerprint)", onToggleLock)
                 MenuItem("App info", onInfo)
                 MenuItem("Uninstall", onUninstall)
             } else {

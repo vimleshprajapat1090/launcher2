@@ -100,7 +100,8 @@ data class AppItem(
     val pkg: String,
     val icon: ImageBitmap,
     val category: String,
-    val opaque: Boolean
+    val opaque: Boolean,
+    val installed: Long
 )
 
 sealed interface HomeItem {
@@ -113,7 +114,9 @@ class DropInfo(
     val merge: Boolean,
     val edge: Int,
     val base: Int,
-    val capacity: Int
+    val capacity: Int,
+    val pageIndex: Int,
+    val toDock: Boolean
 )
 
 class FastLongPress(private val base: ViewConfiguration) : ViewConfiguration by base {
@@ -231,7 +234,12 @@ fun loadApps(context: Context): List<AppItem> {
                 pkg = it.activityInfo.packageName,
                 icon = rendered.first.asImageBitmap(),
                 category = categoryOf(pm, it.activityInfo.packageName),
-                opaque = rendered.second
+                opaque = rendered.second,
+                installed = try {
+                    pm.getPackageInfo(it.activityInfo.packageName, 0).firstInstallTime
+                } catch (e: Exception) {
+                    0L
+                }
             )
         }
         .distinctBy { it.pkg }
@@ -281,6 +289,9 @@ fun IconGrid(
     cols: Int,
     iconSize: Dp,
     screenW: Float,
+    pageIndex: Int,
+    dockTop: Float,
+    showLabels: Boolean,
     editing: Boolean,
     wiggle: State<Float>,
     badges: Map<String, Int>,
@@ -315,6 +326,7 @@ fun IconGrid(
                                 is HomeItem.AppEntry -> AppIcon(
                                     app = item.app,
                                     size = iconSize,
+                                    showLabel = showLabels,
                                     editing = editing,
                                     wiggle = if (editing) wiggle else null,
                                     badge = badges[item.app.pkg] ?: 0,
@@ -339,9 +351,18 @@ fun IconGrid(
                                         } else {
                                             0
                                         }
+                                        val toDock = dockTop > 0f && pt.y > dockTop - 30f
                                         onReorder(
                                             item.app,
-                                            DropInfo(baseIndex + row * cols + col, merge, edge, baseIndex, rowCount * cols)
+                                            DropInfo(
+                                                baseIndex + row * cols + col,
+                                                merge,
+                                                edge,
+                                                baseIndex,
+                                                rowCount * cols,
+                                                pageIndex,
+                                                toDock
+                                            )
                                         )
                                     }
                                 )
@@ -394,6 +415,11 @@ fun LauncherScreen(
         )
     }
     var dockMax by remember { mutableStateOf(prefs.getInt("dockmax", 4)) }
+    var homeWidgets by remember { mutableStateOf(prefs.getBoolean("homewidgets", false)) }
+    var showLabels by remember { mutableStateOf(prefs.getBoolean("labels", true)) }
+    var iconStep by remember { mutableStateOf(prefs.getInt("iconstep", 1)) }
+    var locked by remember { mutableStateOf(readList("locked")) }
+    var pendingLaunch by remember { mutableStateOf<AppItem?>(null) }
     var folders by remember { mutableStateOf(parseFolders(prefs.getString("folders", "")!!)) }
     var weatherCity by remember { mutableStateOf(prefs.getString("city", "")!!) }
     var searching by remember { mutableStateOf(false) }
@@ -480,7 +506,7 @@ fun LauncherScreen(
         .filter { it.apps.isNotEmpty() }
     val items: List<HomeItem> = folderEntries + homeApps.map { HomeItem.AppEntry(it) }
 
-    val launch: (AppItem) -> Unit = { app ->
+    val openApp: (AppItem) -> Unit = { app ->
         val li = context.packageManager.getLaunchIntentForPackage(app.pkg)
         if (li != null) {
             val opts = try {
@@ -500,6 +526,48 @@ fun LauncherScreen(
                 null
             }
             context.startActivity(li, opts)
+        }
+    }
+
+    val lockLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val a = pendingLaunch
+        pendingLaunch = null
+        if (res.resultCode == Activity.RESULT_OK && a != null) {
+            openApp(a)
+        }
+    }
+
+    val launch: (AppItem) -> Unit = { app ->
+        if (app.pkg in locked) {
+            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val ci = km.createConfirmDeviceCredentialIntent(app.label, "Phone ka PIN, pattern ya fingerprint daalo")
+            if (ci != null) {
+                pendingLaunch = app
+                lockLauncher.launch(ci)
+            } else {
+                openApp(app)
+            }
+        } else {
+            openApp(app)
+        }
+    }
+
+    val backupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val ok = exportPrefs(context, prefs, uri)
+            Toast.makeText(context, if (ok) "Backup ho gaya" else "Backup nahi hua", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            if (importPrefs(context, prefs, uri)) {
+                (context as Activity).recreate()
+            } else {
+                Toast.makeText(context, "Restore nahi hua", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -582,11 +650,39 @@ fun LauncherScreen(
         Toast.makeText(context, "Folder bana: " + name, Toast.LENGTH_SHORT).show()
     }
 
+    fun addToDock(app: AppItem) {
+        val cur = dock.map { it.pkg }
+        if (app.pkg in cur) return
+        if (cur.size >= dockMax) {
+            Toast.makeText(context, "Dock full (max " + dockMax + ")", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val u = cur + app.pkg
+        dockPkgs = u
+        saveList("dock", u)
+    }
+
+    fun removeFromDock(app: AppItem) {
+        val u = dock.map { it.pkg } - app.pkg
+        dockPkgs = u
+        saveList("dock", u)
+    }
+
+    fun toggleLock(pkg: String) {
+        val u = if (pkg in locked) locked - pkg else locked + pkg
+        locked = u
+        saveList("locked", u)
+    }
+
     fun handleDrop(app: AppItem, d: DropInfo) {
+        if (d.toDock) {
+            addToDock(app)
+            return
+        }
         if (d.edge != 0) {
             val target = if (d.edge > 0) d.base + d.capacity else (d.base - 1).coerceAtLeast(0)
             moveApp(app, target)
-            pendingPage = d.base / d.capacity + 1 + d.edge
+            pendingPage = d.pageIndex + 1 + d.edge
             return
         }
         val targetItem = items.getOrNull(d.index)
@@ -604,10 +700,15 @@ fun LauncherScreen(
         val screenH = constraints.maxHeight.toFloat()
         val isTablet = maxWidth > 600.dp
         val cols = if (isTablet) 6 else 4
-        val iconSize = if (isTablet) 66.dp else 60.dp
+        val baseIcon = if (isTablet) 66f else 60f
+        val iconSize = (baseIcon + (iconStep - 1) * 8f).dp
         val rows = ((maxHeight.value - 290f) / 100f).toInt().coerceIn(2, 8)
         val capacity = cols * rows
-        val pages: List<List<HomeItem>> = items.chunked(capacity).ifEmpty { listOf(emptyList()) }
+        val showHomeWidgets = homeWidgets && widgets.isNotEmpty()
+        val firstRows = if (showHomeWidgets) (rows - 2).coerceAtLeast(0) else rows
+        val firstCount = cols * firstRows
+        val pages: List<List<HomeItem>> =
+            listOf(items.take(firstCount)) + items.drop(firstCount).chunked(capacity)
         val pagerState = rememberPagerState(initialPage = 1, pageCount = { pages.size + 2 })
 
         val dockCount = dock.size.coerceAtLeast(1)
@@ -679,13 +780,26 @@ fun LauncherScreen(
                                     }
                                     .padding(top = 8.dp, start = 12.dp, end = 12.dp)
                             ) {
+                                if (pageIndex == 0 && showHomeWidgets) {
+                                    HomeWidgets(
+                                        selected = widgets,
+                                        weather = weather,
+                                        battery = battery,
+                                        media = media,
+                                        onWeatherClick = { showCityDialog = true },
+                                        onLongPress = { showHomeMenu = true }
+                                    )
+                                }
                                 IconGrid(
                                     items = pages[pageIndex],
-                                    baseIndex = pageIndex * capacity,
-                                    rowCount = rows,
+                                    baseIndex = if (pageIndex == 0) 0 else firstCount + (pageIndex - 1) * capacity,
+                                    rowCount = if (pageIndex == 0) firstRows else rows,
                                     cols = cols,
                                     iconSize = iconSize,
                                     screenW = screenW,
+                                    pageIndex = pageIndex,
+                                    dockTop = dockPos.y,
+                                    showLabels = showLabels,
                                     editing = editing,
                                     wiggle = wiggle,
                                     badges = badges,
@@ -701,7 +815,9 @@ fun LauncherScreen(
                             LibraryPage(
                                 apps = visible,
                                 onSearch = { searching = true },
-                                onOpen = { name, list -> openGroup = name to list }
+                                onOpen = { name, list -> openGroup = name to list },
+                                onLaunch = launch,
+                                onLong = { app -> menuApp = app }
                             )
                         }
                     }
@@ -763,8 +879,17 @@ fun LauncherScreen(
                                 size = dockIcon,
                                 showLabel = false,
                                 badge = badges[app.pkg] ?: 0,
+                                editing = editing,
+                                wiggle = if (editing) wiggle else null,
+                                enableDrag = editing,
+                                onRemove = { removeFromDock(app) },
                                 onClick = { if (!editing) launch(app) },
-                                onLongClick = { if (!editing) menuApp = app }
+                                onLongClick = { menuApp = app },
+                                onDrop = { pt ->
+                                    if (pt.y < dockPos.y - 40f) {
+                                        removeFromDock(app)
+                                    }
+                                }
                             )
                         }
                     }
@@ -829,6 +954,9 @@ fun LauncherScreen(
                     lockReady = isLockReady(context),
                     weatherCity = weatherCity,
                     dockMax = dockMax,
+                    homeWidgets = homeWidgets,
+                    showLabels = showLabels,
+                    sizeLabel = if (iconStep == 0) "Chhota" else if (iconStep == 1) "Normal" else "Bada",
                     onWallpaper = {
                         showHomeMenu = false
                         picker.launch("image/*")
@@ -871,10 +999,33 @@ fun LauncherScreen(
                         showHomeMenu = false
                         showWidgetPicker = true
                     },
+                    onHomeWidgets = {
+                        val v = !homeWidgets
+                        homeWidgets = v
+                        prefs.edit().putBoolean("homewidgets", v).apply()
+                    },
+                    onLabels = {
+                        val v = !showLabels
+                        showLabels = v
+                        prefs.edit().putBoolean("labels", v).apply()
+                    },
+                    onIconSize = {
+                        val n = (iconStep + 1) % 3
+                        iconStep = n
+                        prefs.edit().putInt("iconstep", n).apply()
+                    },
                     onDockSize = {
                         val n = if (dockMax >= 6) 4 else dockMax + 1
                         dockMax = n
                         prefs.edit().putInt("dockmax", n).apply()
+                    },
+                    onBackup = {
+                        showHomeMenu = false
+                        backupLauncher.launch("iphone_launcher_backup.json")
+                    },
+                    onRestore = {
+                        showHomeMenu = false
+                        restoreLauncher.launch(arrayOf("*/*"))
                     },
                     onResetLayout = {
                         order = emptyList()
@@ -942,6 +1093,7 @@ fun LauncherScreen(
                     inFolder = app.pkg in folderPkgs,
                     inNoHome = app.pkg in noHome,
                     isHidden = app.pkg in hidden,
+                    isLocked = app.pkg in locked,
                     folderNames = folders.map { it.first },
                     onDock = {
                         toggleDock(app)
@@ -965,6 +1117,10 @@ fun LauncherScreen(
                         toggleHidden(app.pkg)
                         menuApp = null
                         openGroup = null
+                    },
+                    onToggleLock = {
+                        toggleLock(app.pkg)
+                        menuApp = null
                     },
                     onInfo = {
                         menuApp = null
@@ -1013,6 +1169,22 @@ fun LauncherScreen(
                             } else {
                                 Toast.makeText(context, "Wallpaper nahi lag paya", Toast.LENGTH_SHORT).show()
                             }
+                            pendingWall = null
+                        }
+                    },
+                    onApplyLock = { z, x, y ->
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                setLockWallpaper(
+                                    context,
+                                    renderWallpaper(bmp, screenW.toInt(), screenH.toInt(), z, x, y)
+                                )
+                            }
+                            Toast.makeText(
+                                context,
+                                if (ok) "Lock screen wallpaper lag gaya" else "Lock screen wallpaper nahi lag paya",
+                                Toast.LENGTH_LONG
+                            ).show()
                             pendingWall = null
                         }
                     },
