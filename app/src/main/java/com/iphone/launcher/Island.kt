@@ -2,10 +2,12 @@ package com.iphone.launcher
 
 import android.content.ComponentName
 import android.content.Context
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.view.KeyEvent
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -52,8 +54,10 @@ data class MediaInfo(
 
 class MediaWatcher(private val context: Context) {
     var info by mutableStateOf<MediaInfo?>(null)
+    var dismissed by mutableStateOf(false)
 
     private var controller: MediaController? = null
+    private var started = false
     private val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
     private val cn = ComponentName(context, NotificationListener::class.java)
 
@@ -76,11 +80,12 @@ class MediaWatcher(private val context: Context) {
     }
 
     fun start() {
+        if (started) return
         try {
             msm.addOnActiveSessionsChangedListener(sessionsListener, cn)
+            started = true
             attach(msm.getActiveSessions(cn))
         } catch (e: Exception) {
-            info = null
         }
     }
 
@@ -94,50 +99,94 @@ class MediaWatcher(private val context: Context) {
         } catch (e: Exception) {
         }
         controller = null
+        started = false
+    }
+
+    private fun hasTitle(c: MediaController): Boolean {
+        val t = c.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
+        return !t.isNullOrBlank()
     }
 
     private fun attach(list: List<MediaController>?) {
-        val c = list?.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-            ?: list?.firstOrNull()
-        if (c?.sessionToken != controller?.sessionToken) {
-            controller?.unregisterCallback(callback)
-            controller = c
-            c?.registerCallback(callback)
+        val usable = list?.filter { hasTitle(it) } ?: emptyList()
+        val best = usable.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: usable.firstOrNull()
+        if (best == null) {
+            try {
+                controller?.unregisterCallback(callback)
+            } catch (e: Exception) {
+            }
+            controller = null
+        } else if (best.sessionToken != controller?.sessionToken) {
+            try {
+                controller?.unregisterCallback(callback)
+            } catch (e: Exception) {
+            }
+            controller = best
+            best.registerCallback(callback)
         }
         refresh()
     }
 
     private fun refresh() {
         val c = controller
-        if (c == null) {
-            info = null
-            return
-        }
-        val md = c.metadata
+        val md = c?.metadata
         val title = md?.getString(MediaMetadata.METADATA_KEY_TITLE)
-        if (md == null || title.isNullOrBlank()) {
-            info = null
-            return
+        if (c != null && md != null && !title.isNullOrBlank()) {
+            val playing = c.playbackState?.state == PlaybackState.STATE_PLAYING
+            val artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST)
+                ?: md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+                ?: ""
+            val art = (md.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                ?: md.getBitmap(MediaMetadata.METADATA_KEY_ART))?.asImageBitmap()
+            info = MediaInfo(title, artist, playing, art)
+            if (playing) dismissed = false
+        } else {
+            val last = info
+            if (last != null && last.playing) {
+                info = last.copy(playing = false)
+            }
         }
-        val artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST)
-            ?: md.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
-            ?: ""
-        val art = (md.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-            ?: md.getBitmap(MediaMetadata.METADATA_KEY_ART))?.asImageBitmap()
-        info = MediaInfo(title, artist, c.playbackState?.state == PlaybackState.STATE_PLAYING, art)
+    }
+
+    private fun sendKey(code: Int) {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        } catch (e: Exception) {
+        }
+    }
+
+    fun dismiss() {
+        dismissed = true
     }
 
     fun playPause() {
-        val c = controller ?: return
-        if (info?.playing == true) c.transportControls.pause() else c.transportControls.play()
+        val c = controller
+        val state = c?.playbackState?.state
+        if (c != null && state != null &&
+            state != PlaybackState.STATE_NONE && state != PlaybackState.STATE_STOPPED
+        ) {
+            if (state == PlaybackState.STATE_PLAYING) {
+                c.transportControls.pause()
+            } else {
+                c.transportControls.play()
+            }
+        } else {
+            sendKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+        }
+        dismissed = false
     }
 
     fun next() {
-        controller?.transportControls?.skipToNext()
+        val c = controller
+        if (c != null) c.transportControls.skipToNext() else sendKey(KeyEvent.KEYCODE_MEDIA_NEXT)
     }
 
     fun prev() {
-        controller?.transportControls?.skipToPrevious()
+        val c = controller
+        if (c != null) c.transportControls.skipToPrevious() else sendKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
     }
 }
 
@@ -146,22 +195,29 @@ fun DynamicIsland(
     media: MediaWatcher,
     call: CallInfo?,
     hasAccess: Boolean,
-    onNeedAccess: () -> Unit
+    onNeedAccess: () -> Unit,
+    toast: ToastInfo? = null,
+    showIdle: Boolean = true
 ) {
-    val info = media.info
+    val info = if (media.dismissed) null else media.info
     var expanded by remember { mutableStateOf(false) }
     val mode = when {
         call != null -> 2
+        toast != null -> 3
         info != null -> 1
         else -> 0
     }
+    if (mode == 0 && !showIdle) return
+
     val targetW = when (mode) {
         2 -> 320.dp
+        3 -> 320.dp
         1 -> if (expanded) 320.dp else 200.dp
         else -> 112.dp
     }
     val targetH = when (mode) {
         2 -> 128.dp
+        3 -> 88.dp
         1 -> if (expanded) 124.dp else 36.dp
         else -> 32.dp
     }
@@ -179,6 +235,12 @@ fun DynamicIsland(
                     if (!hasAccess) onNeedAccess()
                 } else if (mode == 1) {
                     expanded = !expanded
+                } else if (mode == 3 && toast != null) {
+                    try {
+                        toast.intent?.send()
+                    } catch (e: Exception) {
+                    }
+                    IslandState.toast = null
                 }
             },
         contentAlignment = Alignment.Center
@@ -187,6 +249,41 @@ fun DynamicIsland(
             if (expanded) ExpandedMusic(info, media) else CompactMusic(info)
         } else if (mode == 2 && call != null) {
             CallContent(call)
+        } else if (mode == 3 && toast != null) {
+            ToastContent(toast)
+        }
+    }
+}
+
+@Composable
+fun ToastContent(t: ToastInfo) {
+    Row(
+        Modifier.fillMaxSize().padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (t.icon != null) {
+            Image(
+                bitmap = t.icon,
+                contentDescription = null,
+                modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+            )
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(
+                t.title,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                t.text,
+                color = Color(0xFFB0B0B5),
+                fontSize = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -254,6 +351,12 @@ fun ExpandedMusic(info: MediaInfo, media: MediaWatcher) {
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            Text(
+                "X",
+                color = Color(0xFF8E8E93),
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { media.dismiss() }.padding(8.dp)
+            )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             PlayerIcon(0) { media.prev() }
@@ -338,7 +441,7 @@ fun CallContent(call: CallInfo) {
             call.actions.take(3).forEach { a ->
                 val t = a.title.lowercase()
                 val bad = t.contains("decline") || t.contains("reject") || t.contains("hang") ||
-                    t.contains("end") || t.contains("disconnect")
+                    t.contains("end") || t.contains("disconnect") || t.contains("cut")
                 Box(
                     Modifier.clip(RoundedCornerShape(50))
                         .background(if (bad) Color(0xFFFF3B30) else Color(0xFF30D158))
