@@ -56,6 +56,8 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -71,13 +73,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.text.font.Font
@@ -109,16 +114,6 @@ sealed interface HomeItem {
     data class FolderEntry(val name: String, val apps: List<AppItem>) : HomeItem
 }
 
-class DropInfo(
-    val index: Int,
-    val merge: Boolean,
-    val edge: Int,
-    val base: Int,
-    val capacity: Int,
-    val pageIndex: Int,
-    val toDock: Boolean
-)
-
 class FastLongPress(private val base: ViewConfiguration) : ViewConfiguration by base {
     override val longPressTimeoutMillis: Long
         get() = 280L
@@ -129,7 +124,7 @@ val LIBRARY_ORDER = listOf(
 )
 
 class MainActivity : ComponentActivity() {
-    private val media by lazy { MediaWatcher(this) }
+    private val media by lazy { IslandState.media(applicationContext) }
     private var hasAccess by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -154,14 +149,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        IslandState.launcherVisible = true
         hasAccess = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
-        media.stop()
-        if (hasAccess) media.start()
+        if (hasAccess) {
+            media.start()
+            IslandState.service?.ensureOverlay()
+        }
     }
 
-    override fun onDestroy() {
-        media.stop()
-        super.onDestroy()
+    override fun onPause() {
+        IslandState.launcherVisible = false
+        super.onPause()
     }
 
     private fun loadAppFont(): FontFamily {
@@ -288,30 +286,34 @@ fun IconGrid(
     rowCount: Int,
     cols: Int,
     iconSize: Dp,
-    screenW: Float,
     pageIndex: Int,
-    dockTop: Float,
     showLabels: Boolean,
     editing: Boolean,
     wiggle: State<Float>,
     badges: Map<String, Int>,
+    ctrl: DragController,
     onLaunch: (AppItem) -> Unit,
     onLong: (AppItem) -> Unit,
     onRemove: (AppItem) -> Unit,
     onFolder: (String, List<AppItem>) -> Unit,
-    onFolderLong: (String) -> Unit,
-    onReorder: (AppItem, DropInfo) -> Unit
+    onFolderLong: (String) -> Unit
 ) {
-    val density = LocalDensity.current
-    val cellHpx = with(density) { 100.dp.toPx() }
-    val origin = remember { FloatArray(3) }
+    val dragging = ctrl.app
+    val arr = remember { FloatArray(5) }
+
+    DisposableEffect(pageIndex) {
+        ctrl.pageGrids[pageIndex] = arr
+        onDispose { ctrl.pageGrids.remove(pageIndex) }
+    }
 
     Column(
         Modifier.fillMaxWidth().onGloballyPositioned {
             val p = it.positionInWindow()
-            origin[0] = p.x
-            origin[1] = p.y
-            origin[2] = it.size.width.toFloat()
+            arr[0] = p.x
+            arr[1] = p.y
+            arr[2] = it.size.width.toFloat()
+            arr[3] = baseIndex.toFloat()
+            arr[4] = rowCount.toFloat()
         }
     ) {
         for (r in 0 until rowCount) {
@@ -330,41 +332,11 @@ fun IconGrid(
                                     editing = editing,
                                     wiggle = if (editing) wiggle else null,
                                     badge = badges[item.app.pkg] ?: 0,
-                                    enableDrag = editing,
+                                    ghost = dragging?.pkg == item.app.pkg,
+                                    registry = if (editing) ctrl.bounds else null,
                                     onRemove = { onRemove(item.app) },
                                     onClick = { if (!editing) onLaunch(item.app) },
-                                    onLongClick = { onLong(item.app) },
-                                    onDrop = { pt ->
-                                        val cw = origin[2] / cols
-                                        val relX = if (cw > 0f) (pt.x - origin[0]) / cw else 0f
-                                        val relY = (pt.y - origin[1]) / cellHpx
-                                        val col = relX.toInt().coerceIn(0, cols - 1)
-                                        val row = relY.toInt().coerceIn(0, rowCount - 1)
-                                        val fx = relX - col
-                                        val fy = relY - row
-                                        val merge = fx in 0.2f..0.8f && fy in 0.05f..0.85f
-                                        val margin = screenW * 0.07f
-                                        val edge = if (pt.x < margin) {
-                                            -1
-                                        } else if (pt.x > screenW - margin) {
-                                            1
-                                        } else {
-                                            0
-                                        }
-                                        val toDock = dockTop > 0f && pt.y > dockTop - 30f
-                                        onReorder(
-                                            item.app,
-                                            DropInfo(
-                                                baseIndex + row * cols + col,
-                                                merge,
-                                                edge,
-                                                baseIndex,
-                                                rowCount * cols,
-                                                pageIndex,
-                                                toDock
-                                            )
-                                        )
-                                    }
+                                    onLongClick = { if (!editing) onLong(item.app) }
                                 )
                                 is HomeItem.FolderEntry -> FolderIcon(
                                     name = item.name,
@@ -418,6 +390,7 @@ fun LauncherScreen(
     var homeWidgets by remember { mutableStateOf(prefs.getBoolean("homewidgets", false)) }
     var showLabels by remember { mutableStateOf(prefs.getBoolean("labels", true)) }
     var iconStep by remember { mutableStateOf(prefs.getInt("iconstep", 1)) }
+    var pageEffect by remember { mutableStateOf(prefs.getInt("pageeffect", 0)) }
     var locked by remember { mutableStateOf(readList("locked")) }
     var pendingLaunch by remember { mutableStateOf<AppItem?>(null) }
     var folders by remember { mutableStateOf(parseFolders(prefs.getString("folders", "")!!)) }
@@ -438,6 +411,8 @@ fun LauncherScreen(
 
     val badges = IslandState.badges
     val wiggle = wiggleState(editing)
+    val ctrl = remember { DragController() }
+    val haptic = LocalHapticFeedback.current
 
     val wallpaper by produceState<WallpaperImages?>(initialValue = null, wallVersion) {
         value = withContext(Dispatchers.IO) { loadWallpaper(context) }
@@ -494,6 +469,7 @@ fun LauncherScreen(
     val dock = dockPkgs.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }
         .take(dockMax)
         .ifEmpty { visible.take(4) }
+    val dockRef = rememberUpdatedState(dock)
     val folderPkgs = folders.flatMap { it.second }.toSet()
     val homeApps = visible
         .filter { a -> dock.none { it.pkg == a.pkg } && a.pkg !in folderPkgs && a.pkg !in noHome }
@@ -674,24 +650,14 @@ fun LauncherScreen(
         saveList("locked", u)
     }
 
-    fun handleDrop(app: AppItem, d: DropInfo) {
-        if (d.toDock) {
-            addToDock(app)
-            return
-        }
-        if (d.edge != 0) {
-            val target = if (d.edge > 0) d.base + d.capacity else (d.base - 1).coerceAtLeast(0)
-            moveApp(app, target)
-            pendingPage = d.pageIndex + 1 + d.edge
-            return
-        }
-        val targetItem = items.getOrNull(d.index)
-        if (d.merge && targetItem is HomeItem.AppEntry && targetItem.app.pkg != app.pkg) {
+    fun handleDrop(app: AppItem, index: Int, merge: Boolean) {
+        val targetItem = items.getOrNull(index)
+        if (merge && targetItem is HomeItem.AppEntry && targetItem.app.pkg != app.pkg) {
             createFolder(app, targetItem.app)
-        } else if (d.merge && targetItem is HomeItem.FolderEntry) {
+        } else if (merge && targetItem is HomeItem.FolderEntry) {
             moveToFolder(app.pkg, targetItem.name)
         } else {
-            moveApp(app, d.index)
+            moveApp(app, index)
         }
     }
 
@@ -715,27 +681,95 @@ fun LauncherScreen(
         val dockIcon = minOf(iconSize.value, (maxWidth.value - 64f - 14f * (dockCount - 1)) / dockCount)
             .coerceAtLeast(36f).dp
 
-        LaunchedEffect(pendingPage) {
-            if (pendingPage >= 0) {
-                pagerState.animateScrollToPage(pendingPage.coerceIn(1, pages.size))
-                pendingPage = -1
+        val density = LocalDensity.current
+        val cellHpx = with(density) { 100.dp.toPx() }
+
+        fun finishDrag() {
+            val app = ctrl.app ?: return
+            val p = ctrl.pos
+            val wasDock = ctrl.fromDock
+            ctrl.app = null
+            if (p.y >= dockPos.y - 30f) {
+                if (!wasDock) addToDock(app)
+                return
+            }
+            if (wasDock) removeFromDock(app)
+            val g = ctrl.pageGrids[pagerState.currentPage - 1] ?: return
+            val gw = g[2]
+            val rowsHere = g[4].toInt()
+            if (gw <= 0f || rowsHere < 1) return
+            val cw = gw / cols
+            val relX = (p.x - g[0]) / cw
+            val relY = (p.y - g[1]) / cellHpx
+            val col = relX.toInt().coerceIn(0, cols - 1)
+            val row = relY.toInt().coerceIn(0, rowsHere - 1)
+            val fx = relX - col
+            val fy = relY - row
+            val merge = relX >= 0f && relY >= 0f && fx in 0.2f..0.8f && fy in 0.05f..0.85f
+            handleDrop(app, g[3].toInt() + row * cols + col, merge)
+        }
+
+        val finishRef = rememberUpdatedState({ finishDrag() })
+
+        LaunchedEffect(ctrl.app != null) {
+            var since = 0L
+            while (ctrl.app != null) {
+                val p = ctrl.pos
+                val margin = screenW * 0.08f
+                val dir = if (p.x < margin) -1 else if (p.x > screenW - margin) 1 else 0
+                if (dir != 0) {
+                    if (since == 0L) since = System.currentTimeMillis()
+                    if (System.currentTimeMillis() - since > 450L) {
+                        val target = (pagerState.currentPage + dir).coerceIn(1, pages.size)
+                        if (target != pagerState.currentPage) {
+                            pagerState.animateScrollToPage(target)
+                        }
+                        since = 0L
+                    }
+                } else {
+                    since = 0L
+                }
+                delay(60)
             }
         }
 
+        LaunchedEffect(editing) {
+            if (!editing) ctrl.bounds.clear()
+        }
+
         CompositionLocalProvider(LocalFrost provides FrostInfo(wallpaper?.blurred, screenW, screenH)) {
+          Box(
+            Modifier.fillMaxSize().pointerInput(editing) {
+                if (editing) {
+                    editDragGestures(
+                        findApp = { p ->
+                            var hit: AppItem? = null
+                            for (entry in ctrl.bounds.entries) {
+                                if (entry.value.contains(p)) {
+                                    hit = apps.firstOrNull { it.pkg == entry.key }
+                                    break
+                                }
+                            }
+                            hit
+                        },
+                        onStart = { a, p ->
+                            ctrl.fromDock = dockRef.value.any { it.pkg == a.pkg }
+                            ctrl.pos = p
+                            ctrl.app = a
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        },
+                        onMove = { p -> ctrl.pos = p },
+                        onEnd = { finishRef.value() }
+                    )
+                }
+            }
+          ) {
             wallpaper?.let { w ->
                 Image(
                     bitmap = w.full,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().graphicsLayer {
-                        val count = pagerState.pageCount
-                        val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
-                        val frac = if (count > 1) pos / (count - 1) - 0.5f else 0f
-                        scaleX = 1.12f
-                        scaleY = 1.12f
-                        translationX = -frac * size.width * 0.10f
-                    }
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -744,13 +778,16 @@ fun LauncherScreen(
             ) {
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
                     Box(
-                        Modifier.fillMaxSize().graphicsLayer {
-                            val off = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
-                            val a = abs(off).coerceIn(0f, 1f)
-                            alpha = 1f - 0.45f * a
-                            scaleX = 1f - 0.1f * a
-                            scaleY = 1f - 0.1f * a
-                            translationX = off * size.width * 0.25f
+                        if (pageEffect == 1) {
+                            Modifier.fillMaxSize().graphicsLayer {
+                                val off = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+                                val c = off.coerceIn(-1f, 1f)
+                                transformOrigin = TransformOrigin(if (c > 0f) 1f else 0f, 0.5f)
+                                rotationY = c * 60f
+                                cameraDistance = 14f * density
+                            }
+                        } else {
+                            Modifier.fillMaxSize()
                         }
                     ) {
                         if (page == 0) {
@@ -796,19 +833,17 @@ fun LauncherScreen(
                                     rowCount = if (pageIndex == 0) firstRows else rows,
                                     cols = cols,
                                     iconSize = iconSize,
-                                    screenW = screenW,
                                     pageIndex = pageIndex,
-                                    dockTop = dockPos.y,
                                     showLabels = showLabels,
                                     editing = editing,
                                     wiggle = wiggle,
                                     badges = badges,
+                                    ctrl = ctrl,
                                     onLaunch = launch,
                                     onLong = { app -> menuApp = app },
                                     onRemove = { app -> toggleHome(app.pkg) },
                                     onFolder = { name, list -> openGroup = name to list },
-                                    onFolderLong = { name -> folderMenu = name },
-                                    onReorder = { app, d -> handleDrop(app, d) }
+                                    onFolderLong = { name -> folderMenu = name }
                                 )
                             }
                         } else {
@@ -881,15 +916,11 @@ fun LauncherScreen(
                                 badge = badges[app.pkg] ?: 0,
                                 editing = editing,
                                 wiggle = if (editing) wiggle else null,
-                                enableDrag = editing,
+                                ghost = ctrl.app?.pkg == app.pkg,
+                                registry = if (editing) ctrl.bounds else null,
                                 onRemove = { removeFromDock(app) },
                                 onClick = { if (!editing) launch(app) },
-                                onLongClick = { menuApp = app },
-                                onDrop = { pt ->
-                                    if (pt.y < dockPos.y - 40f) {
-                                        removeFromDock(app)
-                                    }
-                                }
+                                onLongClick = { if (!editing) menuApp = app }
                             )
                         }
                     }
@@ -957,6 +988,8 @@ fun LauncherScreen(
                     homeWidgets = homeWidgets,
                     showLabels = showLabels,
                     sizeLabel = if (iconStep == 0) "Chhota" else if (iconStep == 1) "Normal" else "Bada",
+                    overlayOn = Settings.canDrawOverlays(context),
+                    pageEffect = pageEffect,
                     onWallpaper = {
                         showHomeMenu = false
                         picker.launch("image/*")
@@ -1018,6 +1051,26 @@ fun LauncherScreen(
                         val n = if (dockMax >= 6) 4 else dockMax + 1
                         dockMax = n
                         prefs.edit().putInt("dockmax", n).apply()
+                    },
+                    onOverlay = {
+                        showHomeMenu = false
+                        if (Settings.canDrawOverlays(context)) {
+                            IslandState.service?.ensureOverlay()
+                            Toast.makeText(context, "Island doosre apps pe chalu hai", Toast.LENGTH_SHORT).show()
+                        } else {
+                            try {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName))
+                                )
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Settings nahi khuli", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    onPageEffect = {
+                        val n = if (pageEffect == 1) 0 else 1
+                        pageEffect = n
+                        prefs.edit().putInt("pageeffect", n).apply()
                     },
                     onBackup = {
                         showHomeMenu = false
@@ -1196,8 +1249,17 @@ fun LauncherScreen(
                 Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp),
                 contentAlignment = Alignment.TopCenter
             ) {
-                DynamicIsland(media = media, call = call, hasAccess = hasAccess, onNeedAccess = onNeedAccess)
+                DynamicIsland(
+                    media = media,
+                    call = call,
+                    hasAccess = hasAccess,
+                    onNeedAccess = onNeedAccess,
+                    toast = IslandState.toast
+                )
             }
+
+            DragOverlay(ctrl, iconSize)
+          }
         }
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -481,8 +483,8 @@ fun AppIcon(
     wiggle: State<Float>? = null,
     onRemove: () -> Unit = {},
     badge: Int = 0,
-    enableDrag: Boolean = false,
-    onDrop: (Offset) -> Unit = {}
+    ghost: Boolean = false,
+    registry: HashMap<String, Rect>? = null
 ) {
     val haptic = LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
@@ -492,68 +494,34 @@ fun AppIcon(
         animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
         label = "press"
     )
-    val boundsHolder = remember { arrayOfNulls<Rect>(1) }
-    var dragging by remember { mutableStateOf(false) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var startCenter by remember { mutableStateOf(Offset.Zero) }
-    val longHandler: (() -> Unit)? = if (enableDrag) {
-        null
-    } else {
-        fun() {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            onLongClick()
-        }
+    val coordsHolder = remember { arrayOfNulls<LayoutCoordinates>(1) }
+
+    DisposableEffect(app.pkg, registry) {
+        onDispose { registry?.remove(app.pkg) }
     }
 
     Box(
-        Modifier.zIndex(if (dragging) 10f else 0f)
-            .graphicsLayer {
-                rotationZ = wiggle?.value ?: 0f
-                translationX = dragOffset.x
-                translationY = dragOffset.y
-                val s = if (dragging) 1.12f else 1f
-                scaleX = s
-                scaleY = s
-            }
-            .pointerInput(enableDrag) {
-                if (enableDrag) {
-                    detectDragGestures(
-                        onDragStart = {
-                            val b = boundsHolder[0]
-                            startCenter = if (b != null) b.center else Offset.Zero
-                            dragOffset = Offset.Zero
-                            dragging = true
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dragOffset = dragOffset + amount
-                        },
-                        onDragEnd = {
-                            val moved = dragOffset.getDistance()
-                            val drop = startCenter + dragOffset
-                            dragging = false
-                            dragOffset = Offset.Zero
-                            if (moved >= 14f) onDrop(drop)
-                        },
-                        onDragCancel = {
-                            dragging = false
-                            dragOffset = Offset.Zero
-                        }
-                    )
-                }
-            }
+        Modifier.graphicsLayer {
+            rotationZ = wiggle?.value ?: 0f
+            alpha = if (ghost) 0.25f else 1f
+        }
     ) {
         Column(
             modifier = Modifier
                 .graphicsLayer(scaleX = scale, scaleY = scale)
-                .onGloballyPositioned { boundsHolder[0] = it.boundsInWindow() }
+                .onGloballyPositioned {
+                    coordsHolder[0] = it
+                    if (registry != null) {
+                        registry[app.pkg] = it.boundsInWindow()
+                    }
+                }
                 .combinedClickable(
                     interactionSource = interaction,
                     indication = null,
                     onClick = {
-                        val b = boundsHolder[0]
-                        if (b != null) {
+                        val cc = coordsHolder[0]
+                        if (cc != null && cc.isAttached) {
+                            val b = cc.boundsInWindow()
                             LaunchAnchor.x = b.left.toInt()
                             LaunchAnchor.y = b.top.toInt()
                             LaunchAnchor.w = b.width.toInt()
@@ -562,7 +530,10 @@ fun AppIcon(
                         }
                         onClick()
                     },
-                    onLongClick = longHandler
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongClick()
+                    }
                 )
                 .padding(horizontal = 2.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally

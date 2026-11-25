@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -253,6 +254,8 @@ fun HomeMenuDialog(
     homeWidgets: Boolean,
     showLabels: Boolean,
     sizeLabel: String,
+    overlayOn: Boolean,
+    pageEffect: Int,
     onWallpaper: () -> Unit,
     onResetWallpaper: () -> Unit,
     onEdit: () -> Unit,
@@ -263,6 +266,8 @@ fun HomeMenuDialog(
     onHomeWidgets: () -> Unit,
     onLabels: () -> Unit,
     onIconSize: () -> Unit,
+    onOverlay: () -> Unit,
+    onPageEffect: () -> Unit,
     onDockSize: () -> Unit,
     onBackup: () -> Unit,
     onRestore: () -> Unit,
@@ -290,6 +295,8 @@ fun HomeMenuDialog(
                 onWeather
             )
             MenuItem("Icon size: " + sizeLabel + " (badlo)", onIconSize)
+            MenuItem("Island doosre apps pe: " + (if (overlayOn) "ON" else "OFF (chalu karo)"), onOverlay)
+            MenuItem("Page effect: " + (if (pageEffect == 1) "Cube" else "Off (smooth)"), onPageEffect)
             MenuItem("App ke naam: " + (if (showLabels) "ON" else "OFF"), onLabels)
             MenuItem("Dock me max apps: " + dockMax + " (badlo)", onDockSize)
             if (hasHidden) MenuItem("Hidden apps dekho (PIN lagega)", onHidden)
@@ -539,30 +546,55 @@ fun SearchOverlay(apps: List<AppItem>, cols: Int, onClose: () -> Unit, onLaunch:
 
     val results = if (query.isBlank()) apps else apps.filter { it.label.contains(query, ignoreCase = true) }
 
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.65f)).imePadding()) {
+    Box(
+        Modifier.fillMaxSize()
+            .frostedAuto(Color(0xCC000000), Color(0xF2101014))
+            .imePadding()
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+    ) {
         Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
-            TextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search apps") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
-                    val first = results.firstOrNull()
-                    if (first != null) onLaunch(first)
-                }),
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        Text(
-                            "X",
-                            color = Color.Gray,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clickable { query = "" }.padding(12.dp)
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().focusRequester(focus)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search apps") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedContainerColor = Color(0x33FFFFFF),
+                        unfocusedContainerColor = Color(0x33FFFFFF),
+                        cursorColor = Color.White,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedPlaceholderColor = Color(0xFFB0B0B5),
+                        unfocusedPlaceholderColor = Color(0xFFB0B0B5)
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        val first = results.firstOrNull()
+                        if (first != null) onLaunch(first)
+                    }),
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            Text(
+                                "X",
+                                color = Color(0xFFB0B0B5),
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.clickable { query = "" }.padding(12.dp)
+                            )
+                        }
+                    },
+                    modifier = Modifier.weight(1f).focusRequester(focus)
+                )
+                Text(
+                    "Cancel",
+                    color = Color(0xFF0A84FF),
+                    fontSize = 16.sp,
+                    modifier = Modifier.clickable { onClose() }.padding(start = 14.dp, top = 8.dp, bottom = 8.dp)
+                )
+            }
             Spacer(Modifier.height(16.dp))
             if (results.isEmpty()) {
                 Text(
