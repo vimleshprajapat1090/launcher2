@@ -681,8 +681,8 @@ fun LauncherScreen(
         val dockIcon = minOf(iconSize.value, (maxWidth.value - 64f - 14f * (dockCount - 1)) / dockCount)
             .coerceAtLeast(36f).dp
 
-        val density = LocalDensity.current
-        val cellHpx = with(density) { 100.dp.toPx() }
+        val screenDensity = LocalDensity.current
+        val cellHpx = with(screenDensity) { 100.dp.toPx() }
 
         fun finishDrag() {
             val app = ctrl.app ?: return
