@@ -297,29 +297,69 @@ fun Modifier.glass(shape: Shape, tint: Color = Color(0x40000000), fallback: Colo
             shape
         )
 
+val PRESET_NAMES = listOf(
+    "Blue Wave", "Sunset", "Aurora", "Pink Bloom", "Mint", "Purple Night", "Ocean", "Graphite", "Silk"
+)
+
+private fun argb(v: Long): Int = v.toInt()
+
+private fun presetColors(index: Int): IntArray {
+    return when (index) {
+        0 -> intArrayOf(argb(0xFF0A2A66), argb(0xFF1E6BFF), argb(0xCC5AC8FA), argb(0xCC7B61FF), argb(0xCC0A84FF))
+        1 -> intArrayOf(argb(0xFF3A1C71), argb(0xFFD76D77), argb(0xCCFFAF7B), argb(0xCCFF5E62), argb(0xCCFFD86F))
+        2 -> intArrayOf(argb(0xFF05161F), argb(0xFF0B3D4A), argb(0xCC30D158), argb(0xCC64D2FF), argb(0xCCBF5AF2))
+        3 -> intArrayOf(argb(0xFF5B1E5E), argb(0xFFFF6FA8), argb(0xCCFF9AC8), argb(0xCCFFC371), argb(0xCCB57BFF))
+        4 -> intArrayOf(argb(0xFF0B5D5A), argb(0xFF58E0B8), argb(0xCC9FFFE0), argb(0xCC30B0C7), argb(0xCCDFFF8A))
+        5 -> intArrayOf(argb(0xFF120B2E), argb(0xFF3B1E8F), argb(0xCC7D5BFF), argb(0xCCFF4FD8), argb(0xCC3A7BFF))
+        6 -> intArrayOf(argb(0xFF021B3A), argb(0xFF065A82), argb(0xCC00B4D8), argb(0xCC0077B6), argb(0xCC90E0EF))
+        7 -> intArrayOf(argb(0xFF0B0B0F), argb(0xFF2B2B33), argb(0xCC8E8E93), argb(0xCC48484A), argb(0xCC636366))
+        else -> intArrayOf(argb(0xFF6B4A32), argb(0xFFD8C3AE), argb(0xCCF2E6D8), argb(0xCCB38B6D), argb(0xCCE9D5C0))
+    }
+}
+
+// iPhone jaise rangeen, naram wallpapers (asli Apple wallpaper nahi, wahi style)
 fun makePresetWallpaper(index: Int, w: Int, h: Int): Bitmap {
     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val c = Canvas(bmp)
-    val colors = when (index) {
-        0 -> intArrayOf(0xFF1B1464.toInt(), 0xFF6A11CB.toInt(), 0xFFFF6FD8.toInt())
-        1 -> intArrayOf(0xFFFF512F.toInt(), 0xFFF09819.toInt(), 0xFFFFD86F.toInt())
-        2 -> intArrayOf(0xFF0F2027.toInt(), 0xFF2C5364.toInt(), 0xFF4CA1AF.toInt())
-        else -> intArrayOf(0xFF0B0B0F.toInt(), 0xFF232526.toInt(), 0xFF414345.toInt())
+    val pal = presetColors(index)
+    val wf = w.toFloat()
+    val hf = h.toFloat()
+    val m = maxOf(wf, hf)
+
+    val base = Paint(Paint.ANTI_ALIAS_FLAG)
+    base.shader = android.graphics.LinearGradient(
+        0f, 0f, wf * 0.5f, hf, intArrayOf(pal[0], pal[1]), null, android.graphics.Shader.TileMode.CLAMP
+    )
+    c.drawRect(0f, 0f, wf, hf, base)
+
+    val blobs = listOf(
+        floatArrayOf(0.15f, 0.2f, 0.7f),
+        floatArrayOf(0.9f, 0.35f, 0.65f),
+        floatArrayOf(0.4f, 0.95f, 0.8f)
+    )
+    for (k in 0 until 3) {
+        val b = blobs[k]
+        val color = pal[2 + k]
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = android.graphics.RadialGradient(
+            wf * b[0], hf * b[1], m * b[2],
+            intArrayOf(color, color and 0x00FFFFFF), null, android.graphics.Shader.TileMode.CLAMP
+        )
+        c.drawCircle(wf * b[0], hf * b[1], m * b[2], p)
     }
-    val p = Paint(Paint.ANTI_ALIAS_FLAG)
-    p.shader = android.graphics.LinearGradient(
-        0f, 0f, w * 0.6f, h.toFloat(), colors, null, android.graphics.Shader.TileMode.CLAMP
-    )
-    c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
-    val blob = Paint(Paint.ANTI_ALIAS_FLAG)
-    blob.shader = android.graphics.RadialGradient(
-        w * 0.2f, h * 0.25f, w * 0.6f, intArrayOf(0x66FFFFFF, 0x00FFFFFF), null, android.graphics.Shader.TileMode.CLAMP
-    )
-    c.drawCircle(w * 0.2f, h * 0.25f, w * 0.6f, blob)
-    val blob2 = Paint(Paint.ANTI_ALIAS_FLAG)
-    blob2.shader = android.graphics.RadialGradient(
-        w * 0.85f, h * 0.8f, w * 0.7f, intArrayOf(0x44FFFFFF, 0x00FFFFFF), null, android.graphics.Shader.TileMode.CLAMP
-    )
-    c.drawCircle(w * 0.85f, h * 0.8f, w * 0.7f, blob2)
+
+    val wave = Paint(Paint.ANTI_ALIAS_FLAG)
+    wave.style = Paint.Style.FILL
+    for (k in 0 until 3) {
+        val y = hf * (0.35f + 0.2f * k)
+        val path = android.graphics.Path()
+        path.moveTo(0f, y)
+        path.cubicTo(wf * 0.3f, y - hf * 0.18f, wf * 0.65f, y + hf * 0.2f, wf, y - hf * 0.05f)
+        path.lineTo(wf, hf)
+        path.lineTo(0f, hf)
+        path.close()
+        wave.color = if (k % 2 == 0) 0x1AFFFFFF else 0x12000000
+        c.drawPath(path, wave)
+    }
     return bmp
 }

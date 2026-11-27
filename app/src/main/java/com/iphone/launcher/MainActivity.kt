@@ -1142,10 +1142,9 @@ fun LauncherScreen(
 
                 val wallEntries = buildList<MenuEntry> {
                     add(MenuEntry("Photo se wallpaper lagao") { picker.launch("image/*") })
-                    add(MenuEntry("Preset 1 - Purple") { applyPreset(0) })
-                    add(MenuEntry("Preset 2 - Sunset") { applyPreset(1) })
-                    add(MenuEntry("Preset 3 - Ocean") { applyPreset(2) })
-                    add(MenuEntry("Preset 4 - Dark") { applyPreset(3) })
+                    PRESET_NAMES.forEachIndexed { i, name ->
+                        add(MenuEntry("iPhone style: " + name) { applyPreset(i) })
+                    }
                     if (wallpaper != null) {
                         add(MenuEntry("Wallpaper hatao") {
                             deleteWallpaper(context)
@@ -1170,7 +1169,27 @@ fun LauncherScreen(
                     }
                 )
 
+                var overlayWanted by remember { mutableStateOf(prefs.getBoolean("overlayisland", true)) }
                 val islandEntries = buildList<MenuEntry> {
+                    add(
+                        MenuEntry("Doosre apps ke upar Island: " + (if (overlayWanted) "ON" else "OFF"), true) {
+                            val v = !overlayWanted
+                            overlayWanted = v
+                            prefs.edit().putBoolean("overlayisland", v).apply()
+                        }
+                    )
+                    add(
+                        MenuEntry("Island status dekho") {
+                            val v = IslandState.launcherView?.get()
+                            Toast.makeText(
+                                context,
+                                "attached=" + (v?.isAttachedToWindow) +
+                                    " winVis=" + (v?.windowVisibility) +
+                                    " visible=" + IslandState.launcherReallyVisible(),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    )
                     add(
                         MenuEntry(
                             if (overlayOn) "Island doosre apps pe: ON (dobara chalao)"
