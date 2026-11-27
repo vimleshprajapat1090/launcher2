@@ -4,7 +4,13 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.view.Gravity
 import android.view.WindowManager
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
@@ -16,6 +22,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.delay
 
 class IslandOverlay(private val context: Context) : LifecycleOwner, SavedStateRegistryOwner {
     private val registry = LifecycleRegistry(this)
@@ -85,14 +92,25 @@ class IslandOverlay(private val context: Context) : LifecycleOwner, SavedStateRe
 fun OverlayIsland() {
     val context = LocalContext.current
     val media = remember { IslandState.media(context) }
-    if (!IslandState.launcherVisible) {
-        DynamicIsland(
-            media = media,
-            call = IslandState.call,
-            hasAccess = true,
-            onNeedAccess = {},
-            toast = IslandState.toast,
-            showIdle = false
-        )
+    var launcherUp by remember { mutableStateOf(IslandState.launcherReallyVisible()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            launcherUp = IslandState.launcherReallyVisible()
+            delay(400)
+        }
+    }
+    if (!launcherUp) {
+        CompositionLocalProvider(
+            LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = AppFont)
+        ) {
+            DynamicIsland(
+                media = media,
+                call = IslandState.call,
+                hasAccess = true,
+                onNeedAccess = {},
+                toast = IslandState.toast,
+                showIdle = false
+            )
+        }
     }
 }

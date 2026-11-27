@@ -126,6 +126,8 @@ val LIBRARY_ORDER = listOf(
     "Social", "Entertainment", "Productivity", "Creativity", "Games", "Travel", "Utilities"
 )
 
+var AppFontStatus = "none"
+
 class MainActivity : ComponentActivity() {
     private val media by lazy { IslandState.media(applicationContext) }
     private var hasAccess by mutableStateOf(false)
@@ -134,6 +136,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         AppFont = loadAppFont()
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        IslandState.launcherView = java.lang.ref.WeakReference(window.decorView)
         setContent {
             val vc = LocalViewConfiguration.current
             CompositionLocalProvider(
@@ -173,8 +176,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadAppFont(): FontFamily {
+        // 1) res/font/inter.ttf
         val id = resources.getIdentifier("inter", "font", packageName)
-        return if (id != 0) FontFamily(Font(id)) else FontFamily.Default
+        if (id != 0) {
+            try {
+                val f = FontFamily(Font(id))
+                AppFontStatus = "res"
+                return f
+            } catch (e: Exception) {
+            }
+        }
+        // 2) assets/fonts/inter.ttf (release build me res shrink ho jaye to ye chalta hai)
+        try {
+            val f = FontFamily(Font(path = "fonts/inter.ttf", assetManager = assets))
+            AppFontStatus = "assets"
+            return f
+        } catch (e: Exception) {
+        }
+        AppFontStatus = "none"
+        return FontFamily.Default
     }
 
     private fun openAccessSettings() {
@@ -1197,6 +1217,10 @@ fun LauncherScreen(
                 }
 
                 val phoneEntries = listOf(
+                    MenuEntry(
+                        if (AppFontStatus == "none") "Font: file nahi mili (phone ka font chal raha hai)"
+                        else "Font: Inter chal raha hai"
+                    ) { },
                     MenuEntry("Double-tap se screen lock") {
                         if (isLockReady(context)) {
                             Toast.makeText(context, "Double-tap lock pehle se chalu hai", Toast.LENGTH_SHORT).show()

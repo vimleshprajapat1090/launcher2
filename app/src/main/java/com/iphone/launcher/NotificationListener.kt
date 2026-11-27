@@ -35,6 +35,15 @@ object IslandState {
     var toast by mutableStateOf<ToastInfo?>(null)
     var launcherVisible by mutableStateOf(true)
     var service: NotificationListener? = null
+    var launcherView: java.lang.ref.WeakReference<android.view.View>? = null
+
+    // Launcher ki window sach me screen pe dikh rahi hai ya nahi (floating / split window me bhi sahi)
+    fun launcherReallyVisible(): Boolean {
+        val v = launcherView?.get() ?: return false
+        return v.isAttachedToWindow &&
+            v.windowVisibility == android.view.View.VISIBLE &&
+            v.visibility == android.view.View.VISIBLE
+    }
 
     private var mediaInstance: MediaWatcher? = null
 
