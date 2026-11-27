@@ -160,9 +160,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause() {
+    override fun onStart() {
+        super.onStart()
+        IslandState.launcherVisible = true
+    }
+
+    // Floating window / split screen me launcher onPause hota hai par dikhta rehta hai,
+    // isliye "dikh raha hai" ka hisaab onStop se rakhte hain (warna do Island dikhte the)
+    override fun onStop() {
         IslandState.launcherVisible = false
-        super.onPause()
+        super.onStop()
     }
 
     private fun loadAppFont(): FontFamily {

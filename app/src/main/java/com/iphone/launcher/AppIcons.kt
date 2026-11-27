@@ -96,7 +96,7 @@ val labelStyle: TextStyle
         fontSize = 11.sp,
         textAlign = TextAlign.Center,
         fontFamily = AppFont,
-        shadow = Shadow(Color.Black.copy(alpha = 0.5f), Offset(0f, 1f), 3f)
+        shadow = Shadow(Color.Black.copy(alpha = 0.8f), Offset(0f, 1f), 5f)
     )
 
 object LaunchAnchor {
