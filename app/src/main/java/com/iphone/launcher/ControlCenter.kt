@@ -139,8 +139,7 @@ fun CCCircle(label: String, on: Boolean, onClick: () -> Unit) {
 fun CCCard(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(28.dp))
-            .frostedAuto(Color(0x661C1C1E), Color(0xCC2C2C2E)),
+            .glass(RoundedCornerShape(28.dp), Color(0x66000000), Color(0xCC2C2C2E)),
         content = content
     )
 }

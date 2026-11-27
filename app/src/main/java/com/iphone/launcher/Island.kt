@@ -7,7 +7,10 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Build
+import android.telecom.TelecomManager
 import android.view.KeyEvent
+import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,10 +44,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 data class MediaInfo(
     val title: String,
@@ -208,6 +214,13 @@ fun DynamicIsland(
         else -> 0
     }
     if (mode == 0 && !showIdle) return
+
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            delay(5000)
+            expanded = false
+        }
+    }
 
     val targetW = when (mode) {
         2 -> 320.dp
@@ -437,6 +450,27 @@ fun CallContent(call: CallInfo) {
                 )
             }
         }
+        val ctx = LocalContext.current
+        if (call.actions.isEmpty()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(50))
+                        .background(Color(0xFF30D158))
+                        .clickable { answerCall(ctx) }
+                        .padding(horizontal = 22.dp, vertical = 8.dp)
+                ) {
+                    Text("Answer", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+                Box(
+                    Modifier.clip(RoundedCornerShape(50))
+                        .background(Color(0xFFFF3B30))
+                        .clickable { endCall(ctx) }
+                        .padding(horizontal = 22.dp, vertical = 8.dp)
+                ) {
+                    Text("End", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             call.actions.take(3).forEach { a ->
                 val t = a.title.lowercase()
@@ -457,5 +491,27 @@ fun CallContent(call: CallInfo) {
                 }
             }
         }
+    }
+}
+
+fun answerCall(context: Context) {
+    try {
+        val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+        tm.acceptRingingCall()
+    } catch (e: SecurityException) {
+        Toast.makeText(context, "Home menu me Island aur Calls se call permission do", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+    }
+}
+
+fun endCall(context: Context) {
+    try {
+        if (Build.VERSION.SDK_INT >= 28) {
+            val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            tm.endCall()
+        }
+    } catch (e: SecurityException) {
+        Toast.makeText(context, "Home menu me Island aur Calls se call permission do", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
     }
 }

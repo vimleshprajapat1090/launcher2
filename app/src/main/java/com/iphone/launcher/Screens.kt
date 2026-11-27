@@ -121,8 +121,7 @@ fun LibraryPage(
                     ) {
                         Box(
                             Modifier.size(150.dp)
-                                .clip(RoundedCornerShape(30.dp))
-                                .background(Color.White.copy(alpha = 0.22f))
+                                .glass(RoundedCornerShape(30.dp), Color(0x33FFFFFF), Color(0x55FFFFFF))
                                 .clickable { onOpen(name, list) }
                                 .padding(10.dp)
                         ) {
@@ -197,8 +196,7 @@ fun FolderOverlay(
         Column(
             Modifier.padding(24.dp)
                 .widthIn(max = 480.dp)
-                .clip(RoundedCornerShape(32.dp))
-                .frostedAuto(Color(0x661C1C1E), Color(0xCC3A3A3C))
+                .glass(RoundedCornerShape(32.dp), Color(0x66000000), Color(0xCC3A3A3C))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
                 .padding(16.dp)
         ) {
@@ -244,37 +242,11 @@ fun MenuItem(text: String, onClick: () -> Unit) {
     )
 }
 
+class MenuEntry(val label: String, val keepOpen: Boolean = false, val action: () -> Unit)
+
 @Composable
-fun HomeMenuDialog(
-    hasHidden: Boolean,
-    hasWallpaper: Boolean,
-    lockReady: Boolean,
-    weatherCity: String,
-    dockMax: Int,
-    homeWidgets: Boolean,
-    showLabels: Boolean,
-    sizeLabel: String,
-    overlayOn: Boolean,
-    pageEffect: Int,
-    onWallpaper: () -> Unit,
-    onResetWallpaper: () -> Unit,
-    onEdit: () -> Unit,
-    onHidden: () -> Unit,
-    onLockSetup: () -> Unit,
-    onWeather: () -> Unit,
-    onWidgets: () -> Unit,
-    onHomeWidgets: () -> Unit,
-    onLabels: () -> Unit,
-    onIconSize: () -> Unit,
-    onOverlay: () -> Unit,
-    onPageEffect: () -> Unit,
-    onDockSize: () -> Unit,
-    onBackup: () -> Unit,
-    onRestore: () -> Unit,
-    onResetLayout: () -> Unit,
-    onDefaultHome: () -> Unit,
-    onDismiss: () -> Unit
-) {
+fun HomeMenuDialog(sections: List<Pair<String, List<MenuEntry>>>, onDismiss: () -> Unit) {
+    var open by remember { mutableStateOf(-1) }
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier.clip(RoundedCornerShape(24.dp))
@@ -283,31 +255,81 @@ fun HomeMenuDialog(
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp)
         ) {
-            Text("Home Screen", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-            Spacer(Modifier.height(8.dp))
-            MenuItem("Icons edit karo (khiskane ke liye)", onEdit)
-            MenuItem("Wallpaper chuno (gallery se)", onWallpaper)
-            if (hasWallpaper) MenuItem("Default wallpaper pe wapas", onResetWallpaper)
-            MenuItem("Widgets chuno (Today page)", onWidgets)
-            MenuItem("Widgets home page pe bhi: " + (if (homeWidgets) "ON" else "OFF"), onHomeWidgets)
-            MenuItem(
-                if (weatherCity.isBlank()) "Weather ka sheher set karo" else "Weather sheher: " + weatherCity,
-                onWeather
+            if (open < 0 || open >= sections.size) {
+                Text("Quick settings", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(Modifier.height(6.dp))
+                sections.forEachIndexed { i, sec ->
+                    MenuItem(sec.first + "  \u203A") { open = i }
+                }
+            } else {
+                val sec = sections[open]
+                Text(
+                    "\u2039  " + sec.first,
+                    color = Color(0xFF0A84FF),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    modifier = Modifier.clickable { open = -1 }.padding(bottom = 6.dp)
+                )
+                sec.second.forEach { e ->
+                    MenuItem(e.label) {
+                        e.action()
+                        if (!e.keepOpen) onDismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HideManagerDialog(
+    apps: List<AppItem>,
+    hidden: List<String>,
+    onToggle: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(24.dp))
+                .background(Color(0xF22C2C2E))
+                .padding(20.dp)
+        ) {
+            Text("Apps chhupao / dikhao", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Text(
+                "ON wale apps home, library aur search se gayab rahenge",
+                color = Color(0xFFB0B0B5),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
             )
-            MenuItem("Icon size: " + sizeLabel + " (badlo)", onIconSize)
-            MenuItem("Island doosre apps pe: " + (if (overlayOn) "ON" else "OFF (chalu karo)"), onOverlay)
-            MenuItem("Page effect: " + (if (pageEffect == 1) "Cube" else "Off (smooth)"), onPageEffect)
-            MenuItem("App ke naam: " + (if (showLabels) "ON" else "OFF"), onLabels)
-            MenuItem("Dock me max apps: " + dockMax + " (badlo)", onDockSize)
-            if (hasHidden) MenuItem("Hidden apps dekho (PIN lagega)", onHidden)
-            MenuItem(
-                if (lockReady) "Double-tap lock: chalu hai" else "Double-tap lock chalu karo",
-                onLockSetup
-            )
-            MenuItem("Layout backup (file me save)", onBackup)
-            MenuItem("Layout restore (file se)", onRestore)
-            MenuItem("Home layout reset (order, folders)", onResetLayout)
-            MenuItem("Default launcher settings", onDefaultHome)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(1),
+                modifier = Modifier.heightIn(max = 420.dp)
+            ) {
+                items(apps) { app ->
+                    val on = app.pkg in hidden
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable { onToggle(app.pkg) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconImage(app, Modifier.size(34.dp))
+                        Text(
+                            app.label,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            modifier = Modifier.weight(1f).padding(start = 12.dp)
+                        )
+                        Text(
+                            if (on) "HIDDEN" else "dikh raha",
+                            color = if (on) Color(0xFFFF453A) else Color(0xFF8E8E93),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            MenuItem("Done", onDismiss)
         }
     }
 }

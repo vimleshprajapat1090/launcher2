@@ -2,6 +2,8 @@
 
 package com.iphone.launcher
 
+import android.os.Environment
+import android.os.StatFs
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,39 +18,87 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.DateFormatSymbols
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 val WIDGET_CATALOG = listOf(
     "clock" to "Clock",
     "date" to "Date",
+    "calendar" to "Calendar (poora mahina)",
     "weather" to "Weather",
     "battery" to "Battery",
+    "storage" to "Storage",
+    "notes" to "Notes (likh sakte ho)",
     "music" to "Music"
 )
 
+fun isLargeWidget(id: String): Boolean = id == "calendar" || id == "notes"
+
+fun widgetRows(ids: List<String>): List<List<String>> {
+    val rows = ArrayList<List<String>>()
+    var pending: String? = null
+    for (id in ids) {
+        val p = pending
+        if (isLargeWidget(id)) {
+            if (p != null) {
+                rows.add(listOf(p))
+                pending = null
+            }
+            rows.add(listOf(id))
+        } else if (p == null) {
+            pending = id
+        } else {
+            rows.add(listOf(p, id))
+            pending = null
+        }
+    }
+    val last = pending
+    if (last != null) rows.add(listOf(last))
+    return rows
+}
+
 @Composable
 fun WidgetCard(modifier: Modifier, content: @Composable () -> Unit) {
-    Box(modifier.clip(RoundedCornerShape(26.dp)).background(Color(0x99000000))) {
+    Box(modifier.glass(RoundedCornerShape(26.dp), Color(0x40000000), Color(0x66000000))) {
         content()
     }
 }
@@ -88,29 +138,42 @@ fun rememberWidgetData(): WidgetData {
 fun WidgetRow(
     ids: List<String>,
     data: WidgetData,
-    weather: WeatherInfo?,
+    weather: WeatherNow?,
     battery: Int,
     media: MediaWatcher,
-    onWeatherClick: () -> Unit
+    notes: String,
+    onNotes: (String) -> Unit,
+    onWeatherClick: () -> Unit,
+    editing: Boolean = false,
+    drag: WidgetDragState? = null
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         ids.forEach { id ->
-            WidgetCard(Modifier.weight(1f).height(160.dp)) {
+            val large = isLargeWidget(id)
+            DisposableEffect(id, editing) {
+                onDispose { drag?.bounds?.remove(id) }
+            }
+            WidgetCard(
+                Modifier.weight(1f)
+                    .height(if (large) 260.dp else 176.dp)
+                    .graphicsLayer { alpha = if (drag != null && drag.key == id) 0.3f else 1f }
+                    .onGloballyPositioned {
+                        if (editing && drag != null) drag.bounds[id] = it.boundsInWindow()
+                    }
+            ) {
                 WidgetBody(
                     id = id,
-                    time = data.time,
-                    ampm = data.ampm,
-                    weekday = data.weekday,
-                    dayNum = data.dayNum,
-                    month = data.month,
+                    data = data,
                     weather = weather,
                     battery = battery,
                     media = media,
+                    notes = notes,
+                    onNotes = onNotes,
                     onWeatherClick = onWeatherClick
                 )
             }
         }
-        if (ids.size == 1) {
+        if (ids.size == 1 && !isLargeWidget(ids[0])) {
             Spacer(Modifier.weight(1f))
         }
     }
@@ -119,17 +182,17 @@ fun WidgetRow(
 @Composable
 fun HomeWidgets(
     selected: List<String>,
-    weather: WeatherInfo?,
+    weather: WeatherNow?,
     battery: Int,
     media: MediaWatcher,
     onWeatherClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
     val data = rememberWidgetData()
-    val ids = WIDGET_CATALOG.map { it.first }.filter { it in selected }.take(2)
+    val ids = selected.filter { !isLargeWidget(it) }.take(2)
     Box(
         Modifier.fillMaxWidth()
-            .height(170.dp)
+            .height(180.dp)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -137,45 +200,138 @@ fun HomeWidgets(
                 onLongClick = onLongPress
             )
     ) {
-        WidgetRow(ids, data, weather, battery, media, onWeatherClick)
+        WidgetRow(ids, data, weather, battery, media, "", {}, onWeatherClick)
     }
 }
 
 @Composable
 fun TodayPage(
     selected: List<String>,
-    weather: WeatherInfo?,
+    weather: WeatherNow?,
     battery: Int,
     media: MediaWatcher,
+    notes: String,
+    onNotes: (String) -> Unit,
+    editing: Boolean,
+    drag: WidgetDragState,
+    onReorder: (String, Offset) -> Unit,
+    onDoneEdit: () -> Unit,
+    onPick: () -> Unit,
     onWeatherClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
     val data = rememberWidgetData()
-    val ids = WIDGET_CATALOG.map { it.first }.filter { it in selected }
+    val origin = remember { FloatArray(2) }
+    val reorderRef = rememberUpdatedState(onReorder)
+    val rows = widgetRows(selected)
 
-    Column(
+    Box(
         Modifier.fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {},
-                onLongClick = onLongPress
-            )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .onGloballyPositioned {
+                val p = it.positionInWindow()
+                origin[0] = p.x
+                origin[1] = p.y
+            }
+            .pointerInput(editing) {
+                if (editing) {
+                    dragGestures(
+                        findKey = { p ->
+                            val w = Offset(p.x + origin[0], p.y + origin[1])
+                            var hit: String? = null
+                            for (entry in drag.bounds.entries) {
+                                if (entry.value.contains(w)) {
+                                    hit = entry.key
+                                    break
+                                }
+                            }
+                            hit
+                        },
+                        onStart = { k, p ->
+                            drag.pos = Offset(p.x + origin[0], p.y + origin[1])
+                            drag.key = k
+                        },
+                        onMove = { p -> drag.pos = Offset(p.x + origin[0], p.y + origin[1]) },
+                        onEnd = {
+                            val k = drag.key
+                            drag.key = null
+                            if (k != null) reorderRef.value(k, drag.pos)
+                        }
+                    )
+                }
+            }
     ) {
-        Text("Today", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Text(data.full, color = Color(0xFFB0B0B5), fontSize = 14.sp)
-        if (ids.isEmpty()) {
-            Text(
-                "Koi widget nahi hai. Yahan long-press karke Widgets chuno dabao.",
-                color = Color(0xFFB0B0B5),
-                fontSize = 14.sp
-            )
+        Column(
+            Modifier.fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                    onLongClick = onLongPress
+                )
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Today", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                    Text(data.full, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+                }
+                if (editing) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(20.dp))
+                                .background(Color(0x55FFFFFF))
+                                .clickable { onPick() }
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text("+ Widgets", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Box(
+                            Modifier.clip(RoundedCornerShape(20.dp))
+                                .background(Color(0xFF0A84FF))
+                                .clickable { onDoneEdit() }
+                                .padding(horizontal = 22.dp, vertical = 8.dp)
+                        ) {
+                            Text("Done", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+            if (editing) {
+                Text(
+                    "Widget ko pakad ke dusre widget ke upar chhodo, jagah badal jayegi",
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 12.sp
+                )
+            }
+            if (rows.isEmpty()) {
+                Text(
+                    "Koi widget nahi hai. Yahan long-press karke Widgets chuno.",
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 14.sp
+                )
+            }
+            rows.forEach { rowIds ->
+                WidgetRow(rowIds, data, weather, battery, media, notes, onNotes, onWeatherClick, editing, drag)
+            }
         }
-        ids.chunked(2).forEach { rowIds ->
-            WidgetRow(rowIds, data, weather, battery, media, onWeatherClick)
+        val k = drag.key
+        if (k != null) {
+            val label = WIDGET_CATALOG.firstOrNull { it.first == k }?.second ?: k
+            Box(
+                Modifier
+                    .offset {
+                        IntOffset(
+                            (drag.pos.x - origin[0]).roundToInt() - 90,
+                            (drag.pos.y - origin[1]).roundToInt() - 26
+                        )
+                    }
+                    .glass(RoundedCornerShape(20.dp), Color(0x80000000), Color(0xCC2C2C2E))
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
+            ) {
+                Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -183,14 +339,12 @@ fun TodayPage(
 @Composable
 fun WidgetBody(
     id: String,
-    time: String,
-    ampm: String,
-    weekday: String,
-    dayNum: String,
-    month: String,
-    weather: WeatherInfo?,
+    data: WidgetData,
+    weather: WeatherNow?,
     battery: Int,
     media: MediaWatcher,
+    notes: String,
+    onNotes: (String) -> Unit,
     onWeatherClick: () -> Unit
 ) {
     when (id) {
@@ -199,9 +353,9 @@ fun WidgetBody(
                 Modifier.fillMaxSize().padding(16.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(ampm, color = Color(0xFFFF9F0A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(time, color = Color.White, fontSize = 46.sp, fontWeight = FontWeight.Light)
-                Text(weekday, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+                Text(data.ampm, color = Color(0xFFFF9F0A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(data.time, color = Color.White, fontSize = 46.sp, fontWeight = FontWeight.Light)
+                Text(data.weekday, color = Color(0xFFB0B0B5), fontSize = 14.sp)
             }
         }
         "date" -> {
@@ -209,11 +363,12 @@ fun WidgetBody(
                 Modifier.fillMaxSize().padding(16.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(weekday.uppercase(), color = Color(0xFFFF453A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(dayNum, color = Color.White, fontSize = 60.sp, fontWeight = FontWeight.Light)
-                Text(month, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+                Text(data.weekday.uppercase(), color = Color(0xFFFF453A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(data.dayNum, color = Color.White, fontSize = 60.sp, fontWeight = FontWeight.Light)
+                Text(data.month, color = Color(0xFFB0B0B5), fontSize = 14.sp)
             }
         }
+        "calendar" -> CalendarBody()
         "weather" -> {
             if (weather != null) {
                 Column(
@@ -255,16 +410,26 @@ fun WidgetBody(
                     fontSize = 46.sp,
                     fontWeight = FontWeight.Light
                 )
-                Box(
-                    Modifier.fillMaxWidth().height(10.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(Color(0x44FFFFFF))
-                ) {
-                    Box(
-                        Modifier.fillMaxWidth(pct / 100f).fillMaxHeight()
-                            .background(if (pct <= 20) Color(0xFFFF453A) else Color(0xFF30D158))
-                    )
-                }
+                BarMeter(pct / 100f, if (pct <= 20) Color(0xFFFF453A) else Color(0xFF30D158))
+            }
+        }
+        "storage" -> StorageBody()
+        "notes" -> {
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+                Text("NOTES", color = Color(0xFFFFD60A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = notes,
+                    onValueChange = onNotes,
+                    textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
+                    cursorBrush = SolidColor(Color.White),
+                    modifier = Modifier.fillMaxSize().padding(top = 8.dp),
+                    decorationBox = { inner ->
+                        if (notes.isEmpty()) {
+                            Text("Yahan kuch bhi likho...", color = Color(0xFF8E8E93), fontSize = 15.sp)
+                        }
+                        inner()
+                    }
+                )
             }
         }
         else -> {
@@ -298,6 +463,90 @@ fun WidgetBody(
                         PlayerIcon(0) { media.prev() }
                         PlayerIcon(if (info.playing) 2 else 1) { media.playPause() }
                         PlayerIcon(3) { media.next() }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BarMeter(fraction: Float, color: Color) {
+    Box(
+        Modifier.fillMaxWidth().height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(Color(0x44FFFFFF))
+    ) {
+        Box(
+            Modifier.fillMaxWidth(fraction.coerceIn(0.02f, 1f)).fillMaxHeight().background(color)
+        )
+    }
+}
+
+@Composable
+fun StorageBody() {
+    val text = try {
+        val st = StatFs(Environment.getDataDirectory().path)
+        val total = st.blockCountLong * st.blockSizeLong
+        val free = st.availableBlocksLong * st.blockSizeLong
+        val used = total - free
+        Triple(
+            String.format(Locale.getDefault(), "%.1f GB free", free / 1073741824.0),
+            String.format(Locale.getDefault(), "%.0f GB total", total / 1073741824.0),
+            if (total > 0) used.toFloat() / total.toFloat() else 0f
+        )
+    } catch (e: Exception) {
+        Triple("--", "", 0f)
+    }
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text("STORAGE", color = Color(0xFF64D2FF), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Column {
+            Text(text.first, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Light)
+            Text(text.second, color = Color(0xFFB0B0B5), fontSize = 13.sp)
+        }
+        BarMeter(text.third, Color(0xFF0A84FF))
+    }
+}
+
+@Composable
+fun CalendarBody() {
+    val cal = Calendar.getInstance()
+    val today = cal.get(Calendar.DAY_OF_MONTH)
+    val monthName = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(cal.time)
+    val first = cal.clone() as Calendar
+    first.set(Calendar.DAY_OF_MONTH, 1)
+    val startOffset = (first.get(Calendar.DAY_OF_WEEK) - cal.firstDayOfWeek + 7) % 7
+    val days = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val names = DateFormatSymbols.getInstance().shortWeekdays
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Text(monthName.uppercase(), color = Color(0xFFFF453A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            for (i in 0 until 7) {
+                val n = ((cal.firstDayOfWeek - 1 + i) % 7) + 1
+                Text(
+                    names[n].take(1).uppercase(),
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        for (r in 0 until 6) {
+            Row(Modifier.fillMaxWidth().weight(1f)) {
+                for (c in 0 until 7) {
+                    val day = r * 7 + c + 1 - startOffset
+                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                        if (day in 1..days) {
+                            if (day == today) {
+                                Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFFFF453A)))
+                            }
+                            Text(day.toString(), color = Color.White, fontSize = 12.sp)
+                        }
                     }
                 }
             }

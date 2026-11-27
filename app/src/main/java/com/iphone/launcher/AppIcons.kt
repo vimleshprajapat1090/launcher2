@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -44,6 +46,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -67,7 +71,21 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 
 // Icon ki roundness yahan se badlo: bada number = zyada gol
-val IconShape = RoundedCornerShape(percent = 28)
+val IconShape: Shape = GenericShape { size, _ ->
+    val a = size.width / 2f
+    val b = size.height / 2f
+    val n = 5.0
+    val steps = 72
+    for (i in 0..steps) {
+        val t = 2.0 * Math.PI * i / steps
+        val ct = Math.cos(t)
+        val st = Math.sin(t)
+        val x = a + a * Math.signum(ct) * Math.pow(Math.abs(ct), 2.0 / n)
+        val y = b + b * Math.signum(st) * Math.pow(Math.abs(st), 2.0 / n)
+        if (i == 0) moveTo(x.toFloat(), y.toFloat()) else lineTo(x.toFloat(), y.toFloat())
+    }
+    close()
+}
 
 // MainActivity me font file milne par yahan set hota hai
 var AppFont: FontFamily = FontFamily.Default
@@ -440,16 +458,34 @@ fun IconImage(app: AppItem, modifier: Modifier) {
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            Box(Modifier.fillMaxSize().background(Color(0xFFF2F2F7)).padding(6.dp)) {
-                Image(bitmap = app.icon, contentDescription = app.label, modifier = Modifier.fillMaxSize())
+            val base = Color(app.tint)
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(listOf(lerp(Color.White, base, 0.45f), base))
+                )
+            ) {
+                Image(
+                    bitmap = app.icon,
+                    contentDescription = app.label,
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = 0.72f
+                        scaleY = 0.72f
+                    }
+                )
             }
         }
         Box(
             Modifier.matchParentSize().background(
-                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.Transparent))
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.26f),
+                        Color.White.copy(alpha = 0.03f),
+                        Color.Black.copy(alpha = 0.12f)
+                    )
+                )
             )
         )
-        Box(Modifier.matchParentSize().border(0.5.dp, Color.White.copy(alpha = 0.2f), IconShape))
+        Box(Modifier.matchParentSize().border(0.8.dp, Color.White.copy(alpha = 0.38f), IconShape))
     }
 }
 
@@ -538,7 +574,10 @@ fun AppIcon(
                 .padding(horizontal = 2.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            IconImage(app, Modifier.size(size))
+            IconImage(
+                app,
+                Modifier.size(size).shadow(4.dp, IconShape, ambientColor = Color.Black, spotColor = Color.Black)
+            )
             if (showLabel) {
                 Spacer(Modifier.height(4.dp))
                 Text(app.label, style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -588,8 +627,7 @@ fun FolderIcon(
         ) {
             Box(
                 Modifier.size(size)
-                    .clip(IconShape)
-                    .background(Color.White.copy(alpha = 0.3f))
+                    .glass(IconShape, Color(0x33FFFFFF), Color(0x55FFFFFF))
                     .padding(size * 0.08f)
             ) {
                 Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {

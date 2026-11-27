@@ -22,6 +22,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 
+class WidgetDragState {
+    var key by mutableStateOf<String?>(null)
+    var pos by mutableStateOf(Offset.Zero)
+    val bounds = HashMap<String, Rect>()
+}
+
 class DragController {
     var app by mutableStateOf<AppItem?>(null)
     var pos by mutableStateOf(Offset.Zero)
@@ -30,15 +36,15 @@ class DragController {
     val pageGrids = HashMap<Int, FloatArray>()
 }
 
-suspend fun PointerInputScope.editDragGestures(
-    findApp: (Offset) -> AppItem?,
-    onStart: (AppItem, Offset) -> Unit,
+suspend fun PointerInputScope.dragGestures(
+    findKey: (Offset) -> String?,
+    onStart: (String, Offset) -> Unit,
     onMove: (Offset) -> Unit,
     onEnd: () -> Unit
 ) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        val target = findApp(down.position)
+        val target = findKey(down.position)
         if (target == null) return@awaitEachGesture
         var started = false
         var total = Offset.Zero

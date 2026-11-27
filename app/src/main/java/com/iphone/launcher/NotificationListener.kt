@@ -140,10 +140,20 @@ class NotificationListener : NotificationListenerService() {
         }
     }
 
+    private fun isCallNotification(sbn: StatusBarNotification): Boolean {
+        val n = sbn.notification
+        val byType = n.category == Notification.CATEGORY_CALL ||
+            (n.extras.getString(Notification.EXTRA_TEMPLATE) ?: "").endsWith("CallStyle")
+        val p = sbn.packageName
+        val byApp = p.contains("incallui") || p == "com.android.server.telecom"
+        val live = sbn.isOngoing || n.fullScreenIntent != null
+        return (byType || byApp) && live
+    }
+
     private fun update() {
         val info: CallInfo? = try {
             activeNotifications
-                ?.firstOrNull { it.notification.category == Notification.CATEGORY_CALL }
+                ?.firstOrNull { isCallNotification(it) }
                 ?.let { sbn ->
                     val n = sbn.notification
                     CallInfo(

@@ -2,6 +2,7 @@
 
 package com.iphone.launcher
 
+import android.Manifest
 import android.app.Activity
 import android.app.ActivityOptions
 import android.app.KeyguardManager
@@ -92,6 +93,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import kotlin.math.abs
@@ -106,7 +108,8 @@ data class AppItem(
     val icon: ImageBitmap,
     val category: String,
     val opaque: Boolean,
-    val installed: Long
+    val installed: Long,
+    val tint: Int
 )
 
 sealed interface HomeItem {
@@ -220,6 +223,34 @@ fun renderIcon(d: Drawable): Pair<Bitmap, Boolean> {
     return Pair(d.toBitmap(160, 160), false)
 }
 
+fun dominantTint(bmp: Bitmap): Int {
+    val small = Bitmap.createScaledBitmap(bmp, 12, 12, true)
+    var r = 0L
+    var g = 0L
+    var b = 0L
+    var n = 0L
+    for (x in 0 until 12) {
+        for (y in 0 until 12) {
+            val p = small.getPixel(x, y)
+            val a = (p ushr 24) and 0xFF
+            if (a > 60) {
+                r += ((p shr 16) and 0xFF).toLong()
+                g += ((p shr 8) and 0xFF).toLong()
+                b += (p and 0xFF).toLong()
+                n += 1L
+            }
+        }
+    }
+    if (n == 0L) return 0xFF3A3A3C.toInt()
+    val rr = (r / n).toInt()
+    val gg = (g / n).toInt()
+    val bb = (b / n).toInt()
+    val lum = (rr * 299 + gg * 587 + bb * 114) / 1000
+    // bahut halka (safed) icon ho to gehra background do, warna icon dikhega nahi
+    if (lum > 190) return 0xFF48484A.toInt()
+    return (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bb
+}
+
 fun loadApps(context: Context): List<AppItem> {
     val pm = context.packageManager
     val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -233,6 +264,7 @@ fun loadApps(context: Context): List<AppItem> {
                 icon = rendered.first.asImageBitmap(),
                 category = categoryOf(pm, it.activityInfo.packageName),
                 opaque = rendered.second,
+                tint = if (rendered.second) 0xFF2C2C2E.toInt() else dominantTint(rendered.first),
                 installed = try {
                     pm.getPackageInfo(it.activityInfo.packageName, 0).firstInstallTime
                 } catch (e: Exception) {
@@ -408,6 +440,10 @@ fun LauncherScreen(
     var dockPos by remember { mutableStateOf(Offset.Zero) }
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var openGroup by remember { mutableStateOf<Pair<String, List<AppItem>>?>(null) }
+    var showHideManager by remember { mutableStateOf(false) }
+    var widgetEditing by remember { mutableStateOf(false) }
+    var notes by remember { mutableStateOf(prefs.getString("notes", "")!!) }
+    val widgetDrag = remember { WidgetDragState() }
 
     val badges = IslandState.badges
     val wiggle = wiggleState(editing)
@@ -418,18 +454,18 @@ fun LauncherScreen(
         value = withContext(Dispatchers.IO) { loadWallpaper(context) }
     }
 
-    val weather by produceState<WeatherInfo?>(
-        initialValue = if (weatherCity.isBlank()) null else readCachedWeather(prefs),
+    val weather by produceState<WeatherNow?>(
+        initialValue = if (weatherCity.isBlank()) null else readWeatherCache(prefs),
         weatherCity
     ) {
         while (true) {
             if (weatherCity.isBlank()) {
                 value = null
             } else {
-                val f = withContext(Dispatchers.IO) { fetchWeather(weatherCity) }
+                val f = withContext(Dispatchers.IO) { fetchWeatherNow(weatherCity) }
                 if (f != null) {
                     value = f
-                    cacheWeather(prefs, f)
+                    writeWeatherCache(prefs, f)
                 }
             }
             delay(30 * 60 * 1000L)
@@ -547,6 +583,14 @@ fun LauncherScreen(
         }
     }
 
+    val callPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        Toast.makeText(
+            context,
+            if (ok) "Call permission mil gayi" else "Call permission nahi mili",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
     val toggleDock: (AppItem) -> Unit = { app ->
         val cur = dock.map { it.pkg }
         val updated = when {
@@ -650,6 +694,35 @@ fun LauncherScreen(
         saveList("locked", u)
     }
 
+    fun reorderWidget(key: String, drop: Offset) {
+        var target: String? = null
+        for (entry in widgetDrag.bounds.entries) {
+            if (entry.key != key && entry.value.contains(drop)) {
+                target = entry.key
+                break
+            }
+        }
+        if (target == null) return
+        val list = widgets.toMutableList()
+        val from = list.indexOf(key)
+        val to = list.indexOf(target)
+        if (from < 0 || to < 0) return
+        list.removeAt(from)
+        list.add(to, key)
+        widgets = list
+        saveList("widgets", list)
+    }
+
+    fun applyPreset(i: Int) {
+        val dm = context.resources.displayMetrics
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                saveWallpaperBitmap(context, makePresetWallpaper(i, dm.widthPixels, dm.heightPixels))
+            }
+            if (ok) wallVersion += 1
+        }
+    }
+
     fun handleDrop(app: AppItem, index: Int, merge: Boolean) {
         val targetItem = items.getOrNull(index)
         if (merge && targetItem is HomeItem.AppEntry && targetItem.app.pkg != app.pkg) {
@@ -741,22 +814,25 @@ fun LauncherScreen(
           Box(
             Modifier.fillMaxSize().pointerInput(editing) {
                 if (editing) {
-                    editDragGestures(
-                        findApp = { p ->
-                            var hit: AppItem? = null
+                    dragGestures(
+                        findKey = { p ->
+                            var hit: String? = null
                             for (entry in ctrl.bounds.entries) {
                                 if (entry.value.contains(p)) {
-                                    hit = apps.firstOrNull { it.pkg == entry.key }
+                                    hit = entry.key
                                     break
                                 }
                             }
                             hit
                         },
-                        onStart = { a, p ->
-                            ctrl.fromDock = dockRef.value.any { it.pkg == a.pkg }
-                            ctrl.pos = p
-                            ctrl.app = a
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onStart = { key, p ->
+                            val a = apps.firstOrNull { it.pkg == key }
+                            if (a != null) {
+                                ctrl.fromDock = dockRef.value.any { it.pkg == key }
+                                ctrl.pos = p
+                                ctrl.app = a
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            }
                         },
                         onMove = { p -> ctrl.pos = p },
                         onEnd = { finishRef.value() }
@@ -796,8 +872,18 @@ fun LauncherScreen(
                                 weather = weather,
                                 battery = battery,
                                 media = media,
+                                notes = notes,
+                                onNotes = { v ->
+                                    notes = v
+                                    prefs.edit().putString("notes", v).apply()
+                                },
+                                editing = widgetEditing,
+                                drag = widgetDrag,
+                                onReorder = { k, p -> reorderWidget(k, p) },
+                                onDoneEdit = { widgetEditing = false },
+                                onPick = { showWidgetPicker = true },
                                 onWeatherClick = { showCityDialog = true },
-                                onLongPress = { showHomeMenu = true }
+                                onLongPress = { widgetEditing = true }
                             )
                         } else if (page <= pages.size) {
                             val pageIndex = page - 1
@@ -897,13 +983,7 @@ fun LauncherScreen(
                     Row(
                         Modifier.clip(RoundedCornerShape(32.dp))
                             .onGloballyPositioned { dockPos = it.positionInWindow() }
-                            .frosted(
-                                wallpaper?.blurred,
-                                screenW,
-                                screenH,
-                                dockPos,
-                                Color.White.copy(alpha = if (wallpaper != null) 0.14f else 0.22f)
-                            )
+                            .glass(RoundedCornerShape(32.dp), Color(0x22FFFFFF), Color(0x66FFFFFF))
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -979,32 +1059,77 @@ fun LauncherScreen(
             }
 
             if (showHomeMenu) {
-                HomeMenuDialog(
-                    hasHidden = hiddenApps.isNotEmpty(),
-                    hasWallpaper = wallpaper != null,
-                    lockReady = isLockReady(context),
-                    weatherCity = weatherCity,
-                    dockMax = dockMax,
-                    homeWidgets = homeWidgets,
-                    showLabels = showLabels,
-                    sizeLabel = if (iconStep == 0) "Chhota" else if (iconStep == 1) "Normal" else "Bada",
-                    overlayOn = Settings.canDrawOverlays(context),
-                    pageEffect = pageEffect,
-                    onWallpaper = {
-                        showHomeMenu = false
-                        picker.launch("image/*")
+                val sizeName = if (iconStep == 0) "Chhota" else if (iconStep == 1) "Normal" else "Bada"
+                val overlayOn = Settings.canDrawOverlays(context)
+                val callPermOk = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ANSWER_PHONE_CALLS
+                ) == PackageManager.PERMISSION_GRANTED
+
+                val homeEntries = listOf(
+                    MenuEntry("Icons edit karo (khiskao)") { editing = true },
+                    MenuEntry("Icon size: " + sizeName, true) {
+                        val n = (iconStep + 1) % 3
+                        iconStep = n
+                        prefs.edit().putInt("iconstep", n).apply()
                     },
-                    onResetWallpaper = {
-                        deleteWallpaper(context)
-                        wallVersion += 1
-                        showHomeMenu = false
+                    MenuEntry("Dock me max apps: " + dockMax, true) {
+                        val n = if (dockMax >= 6) 4 else dockMax + 1
+                        dockMax = n
+                        prefs.edit().putInt("dockmax", n).apply()
                     },
-                    onEdit = {
-                        editing = true
-                        showHomeMenu = false
+                    MenuEntry("App ke naam: " + (if (showLabels) "ON" else "OFF"), true) {
+                        val v = !showLabels
+                        showLabels = v
+                        prefs.edit().putBoolean("labels", v).apply()
                     },
-                    onHidden = {
-                        showHomeMenu = false
+                    MenuEntry("Page effect: " + (if (pageEffect == 1) "3D" else "Normal"), true) {
+                        val n = if (pageEffect == 1) 0 else 1
+                        pageEffect = n
+                        prefs.edit().putInt("pageeffect", n).apply()
+                    },
+                    MenuEntry("Home pe widgets: " + (if (homeWidgets) "ON" else "OFF"), true) {
+                        val v = !homeWidgets
+                        homeWidgets = v
+                        prefs.edit().putBoolean("homewidgets", v).apply()
+                    },
+                    MenuEntry("Layout reset (icons ki jagah wapas)") {
+                        order = emptyList()
+                        noHome = emptyList()
+                        saveList("order", emptyList())
+                        saveList("nohome", emptyList())
+                        saveFolders(emptyList())
+                    }
+                )
+
+                val widgetEntries = listOf(
+                    MenuEntry("Widgets chuno (add / hatao)") { showWidgetPicker = true },
+                    MenuEntry("Widgets ki jagah badlo") {
+                        widgetEditing = true
+                        scope.launch { pagerState.animateScrollToPage(0) }
+                    },
+                    MenuEntry("Weather ka sheher: " + (if (weatherCity.isBlank()) "set nahi" else weatherCity)) {
+                        showCityDialog = true
+                    }
+                )
+
+                val wallEntries = buildList<MenuEntry> {
+                    add(MenuEntry("Photo se wallpaper lagao") { picker.launch("image/*") })
+                    add(MenuEntry("Preset 1 - Purple") { applyPreset(0) })
+                    add(MenuEntry("Preset 2 - Sunset") { applyPreset(1) })
+                    add(MenuEntry("Preset 3 - Ocean") { applyPreset(2) })
+                    add(MenuEntry("Preset 4 - Dark") { applyPreset(3) })
+                    if (wallpaper != null) {
+                        add(MenuEntry("Wallpaper hatao") {
+                            deleteWallpaper(context)
+                            wallVersion += 1
+                        })
+                    }
+                }
+
+                val appEntries = listOf(
+                    MenuEntry("Apps chhupao / dikhao") { showHideManager = true },
+                    MenuEntry("Hidden apps dekho (" + hiddenApps.size + ")") {
                         val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
                         val pinIntent = km.createConfirmDeviceCredentialIntent(
                             "Hidden apps",
@@ -1015,87 +1140,83 @@ fun LauncherScreen(
                         } else {
                             openGroup = "Hidden" to hiddenApps
                         }
-                    },
-                    onLockSetup = {
-                        showHomeMenu = false
+                    }
+                )
+
+                val islandEntries = buildList<MenuEntry> {
+                    add(
+                        MenuEntry(
+                            if (overlayOn) "Island doosre apps pe: ON (dobara chalao)"
+                            else "Island doosre apps pe chalu karo"
+                        ) {
+                            if (Settings.canDrawOverlays(context)) {
+                                IslandState.service?.ensureOverlay()
+                                Toast.makeText(context, "Island doosre apps pe chalu hai", Toast.LENGTH_SHORT).show()
+                            } else {
+                                try {
+                                    context.startActivity(
+                                        Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:" + context.packageName)
+                                        )
+                                    )
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Settings nahi khuli", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    )
+                    if (!hasAccess) {
+                        add(MenuEntry("Notification access do (music / call / noti)") { onNeedAccess() })
+                    }
+                    add(
+                        MenuEntry(if (callPermOk) "Call permission: mil chuki hai" else "Call answer / decline permission do") {
+                            if (callPermOk) {
+                                Toast.makeText(context, "Call permission pehle se hai", Toast.LENGTH_SHORT).show()
+                            } else {
+                                callPermLauncher.launch(Manifest.permission.ANSWER_PHONE_CALLS)
+                            }
+                        }
+                    )
+                    add(
+                        MenuEntry("Call island test (8 sec)") {
+                            IslandState.call = CallInfo("Test Caller", "Incoming call", emptyList())
+                            scope.launch {
+                                delay(8000)
+                                if (IslandState.call?.title == "Test Caller") IslandState.call = null
+                            }
+                        }
+                    )
+                }
+
+                val phoneEntries = listOf(
+                    MenuEntry("Double-tap se screen lock") {
                         if (isLockReady(context)) {
                             Toast.makeText(context, "Double-tap lock pehle se chalu hai", Toast.LENGTH_SHORT).show()
                         } else {
                             requestLockAdmin(context)
                         }
                     },
-                    onWeather = {
-                        showHomeMenu = false
-                        showCityDialog = true
-                    },
-                    onWidgets = {
-                        showHomeMenu = false
-                        showWidgetPicker = true
-                    },
-                    onHomeWidgets = {
-                        val v = !homeWidgets
-                        homeWidgets = v
-                        prefs.edit().putBoolean("homewidgets", v).apply()
-                    },
-                    onLabels = {
-                        val v = !showLabels
-                        showLabels = v
-                        prefs.edit().putBoolean("labels", v).apply()
-                    },
-                    onIconSize = {
-                        val n = (iconStep + 1) % 3
-                        iconStep = n
-                        prefs.edit().putInt("iconstep", n).apply()
-                    },
-                    onDockSize = {
-                        val n = if (dockMax >= 6) 4 else dockMax + 1
-                        dockMax = n
-                        prefs.edit().putInt("dockmax", n).apply()
-                    },
-                    onOverlay = {
-                        showHomeMenu = false
-                        if (Settings.canDrawOverlays(context)) {
-                            IslandState.service?.ensureOverlay()
-                            Toast.makeText(context, "Island doosre apps pe chalu hai", Toast.LENGTH_SHORT).show()
-                        } else {
-                            try {
-                                context.startActivity(
-                                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName))
-                                )
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Settings nahi khuli", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    onPageEffect = {
-                        val n = if (pageEffect == 1) 0 else 1
-                        pageEffect = n
-                        prefs.edit().putInt("pageeffect", n).apply()
-                    },
-                    onBackup = {
-                        showHomeMenu = false
-                        backupLauncher.launch("iphone_launcher_backup.json")
-                    },
-                    onRestore = {
-                        showHomeMenu = false
-                        restoreLauncher.launch(arrayOf("*/*"))
-                    },
-                    onResetLayout = {
-                        order = emptyList()
-                        noHome = emptyList()
-                        saveList("order", emptyList())
-                        saveList("nohome", emptyList())
-                        saveFolders(emptyList())
-                        showHomeMenu = false
-                    },
-                    onDefaultHome = {
-                        showHomeMenu = false
+                    MenuEntry("Default launcher banao") {
                         try {
                             context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
                         } catch (e: Exception) {
                             Toast.makeText(context, "Settings nahi khuli", Toast.LENGTH_SHORT).show()
                         }
                     },
+                    MenuEntry("Backup banao") { backupLauncher.launch("iphone_launcher_backup.json") },
+                    MenuEntry("Backup se restore karo") { restoreLauncher.launch(arrayOf("*/*")) }
+                )
+
+                HomeMenuDialog(
+                    sections = listOf(
+                        "Home Screen" to homeEntries,
+                        "Widgets" to widgetEntries,
+                        "Wallpaper" to wallEntries,
+                        "Apps (hide / dikhao)" to appEntries,
+                        "Island aur Calls" to islandEntries,
+                        "Phone" to phoneEntries
+                    ),
                     onDismiss = { showHomeMenu = false }
                 )
             }
@@ -1109,6 +1230,15 @@ fun LauncherScreen(
                         saveList("widgets", u)
                     },
                     onDismiss = { showWidgetPicker = false }
+                )
+            }
+
+            if (showHideManager) {
+                HideManagerDialog(
+                    apps = apps,
+                    hidden = hidden,
+                    onToggle = { pkg -> toggleHidden(pkg) },
+                    onDismiss = { showHideManager = false }
                 )
             }
 
