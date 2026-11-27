@@ -3,6 +3,9 @@
 package com.iphone.launcher
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -52,6 +55,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -184,30 +188,92 @@ fun FolderOverlay(
     cols: Int,
     onClose: () -> Unit,
     onLaunch: (AppItem) -> Unit,
-    onLong: (AppItem) -> Unit
+    onLong: (AppItem) -> Unit,
+    onRename: ((String) -> Unit)? = null
 ) {
     BackHandler(enabled = true) { onClose() }
+    var renaming by remember { mutableStateOf(false) }
+    var text by remember(title) { mutableStateOf(title) }
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val pop by animateFloatAsState(
+        targetValue = if (shown) 1f else 0.82f,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow),
+        label = "folderPop"
+    )
+    val fade by animateFloatAsState(targetValue = if (shown) 1f else 0f, label = "folderFade")
     Box(
         Modifier.fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
+            .imePadding()
+            .background(Color.Black.copy(alpha = 0.5f * fade))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() },
         contentAlignment = Alignment.Center
     ) {
         Column(
             Modifier.padding(24.dp)
                 .widthIn(max = 480.dp)
+                .graphicsLayer {
+                    scaleX = pop
+                    scaleY = pop
+                    alpha = fade
+                }
                 .glass(RoundedCornerShape(32.dp), Color(0x66000000), Color(0xCC3A3A3C))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
                 .padding(16.dp)
         ) {
-            Text(
-                title,
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
-            )
+            if (onRename != null && renaming) {
+                val focus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { focus.requestFocus() }
+                TextField(
+                    value = text,
+                    onValueChange = { v -> text = v.filter { ch -> ch != ':' && ch != ';' && ch != ',' } },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    ),
+                    colors = TextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedContainerColor = Color(0x33FFFFFF),
+                        unfocusedContainerColor = Color(0x33FFFFFF),
+                        cursorColor = Color.White,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            val t = text.trim()
+                            renaming = false
+                            if (t.isNotBlank() && t != title) onRename(t)
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).focusRequester(focus)
+                )
+            } else {
+                Text(
+                    title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                        .then(
+                            if (onRename != null) {
+                                Modifier.clickable {
+                                    text = title
+                                    renaming = true
+                                }
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(bottom = 12.dp)
+                )
+            }
             if (apps.isEmpty()) {
                 Text(
                     "Yahan koi app nahi hai",
@@ -474,7 +540,8 @@ fun FolderMenuDialog(
     name: String,
     onRename: (String) -> Unit,
     onDissolve: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit = {}
 ) {
     var text by remember { mutableStateOf(name) }
     Dialog(onDismissRequest = onDismiss) {
@@ -494,6 +561,7 @@ fun FolderMenuDialog(
             MenuItem("Naam badlo") {
                 if (text.isNotBlank()) onRename(text.trim())
             }
+            MenuItem("Folder ko khiskao (edit mode)", onEdit)
             MenuItem("Folder hatao (apps wapas home pe)", onDissolve)
         }
     }

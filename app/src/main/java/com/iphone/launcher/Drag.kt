@@ -30,7 +30,10 @@ class WidgetDragState {
 
 class DragController {
     var app by mutableStateOf<AppItem?>(null)
+    var folderName by mutableStateOf<String?>(null)
+    var folderApps by mutableStateOf<List<AppItem>>(emptyList())
     var pos by mutableStateOf(Offset.Zero)
+    val active: Boolean get() = app != null || folderName != null
     var fromDock = false
     val bounds = HashMap<String, Rect>()
     val pageGrids = HashMap<Int, FloatArray>()
@@ -79,7 +82,8 @@ suspend fun PointerInputScope.dragGestures(
 @Composable
 fun DragOverlay(ctrl: DragController, size: Dp) {
     val app = ctrl.app
-    if (app != null) {
+    val folder = ctrl.folderName
+    if (app != null || folder != null) {
         val px = with(LocalDensity.current) { size.toPx() }
         Box(
             Modifier
@@ -91,7 +95,11 @@ fun DragOverlay(ctrl: DragController, size: Dp) {
                     alpha = 0.95f
                 }
         ) {
-            IconImage(app, Modifier.size(size))
+            if (app != null) {
+                IconImage(app, Modifier.size(size))
+            } else {
+                FolderGlyph(ctrl.folderApps, size)
+            }
         }
     }
 }

@@ -117,6 +117,11 @@ sealed interface HomeItem {
     data class FolderEntry(val name: String, val apps: List<AppItem>) : HomeItem
 }
 
+fun itemKey(item: HomeItem): String = when (item) {
+    is HomeItem.AppEntry -> item.app.pkg
+    is HomeItem.FolderEntry -> "f:" + item.name
+}
+
 class FastLongPress(private val base: ViewConfiguration) : ViewConfiguration by base {
     override val longPressTimeoutMillis: Long
         get() = 280L
@@ -355,9 +360,11 @@ fun IconGrid(
     onLong: (AppItem) -> Unit,
     onRemove: (AppItem) -> Unit,
     onFolder: (String, List<AppItem>) -> Unit,
-    onFolderLong: (String) -> Unit
+    onFolderLong: (String) -> Unit,
+    onFolderRemove: (String) -> Unit
 ) {
     val dragging = ctrl.app
+    val draggingFolder = ctrl.folderName
     val arr = remember { FloatArray(5) }
 
     DisposableEffect(pageIndex) {
@@ -402,6 +409,11 @@ fun IconGrid(
                                     apps = item.apps,
                                     size = iconSize,
                                     badge = folderBadge(item.apps, badges),
+                                    editing = editing,
+                                    wiggle = if (editing) wiggle else null,
+                                    ghost = draggingFolder == item.name,
+                                    registry = if (editing) ctrl.bounds else null,
+                                    onRemove = { onFolderRemove(item.name) },
                                     onClick = { if (!editing) onFolder(item.name, item.apps) },
                                     onLongClick = { if (!editing) onFolderLong(item.name) }
                                 )
@@ -467,6 +479,7 @@ fun LauncherScreen(
     var dockPos by remember { mutableStateOf(Offset.Zero) }
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var openGroup by remember { mutableStateOf<Pair<String, List<AppItem>>?>(null) }
+    var openGroupIsFolder by remember { mutableStateOf(false) }
     var showHideManager by remember { mutableStateOf(false) }
     var widgetEditing by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf(prefs.getString("notes", "")!!) }
@@ -526,6 +539,7 @@ fun LauncherScreen(
     val pinLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
             openGroup = "Hidden" to hiddenApps
+            openGroupIsFolder = false
         }
     }
 
@@ -543,7 +557,12 @@ fun LauncherScreen(
     val folderEntries = folders
         .map { f -> HomeItem.FolderEntry(f.first, f.second.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }) }
         .filter { it.apps.isNotEmpty() }
-    val items: List<HomeItem> = folderEntries + homeApps.map { HomeItem.AppEntry(it) }
+    val items: List<HomeItem> = (folderEntries + homeApps.map { HomeItem.AppEntry(it) })
+        .sortedBy { item ->
+            val i = order.indexOf(itemKey(item))
+            if (i >= 0) i else if (item is HomeItem.FolderEntry) -1 else Int.MAX_VALUE
+        }
+    val itemsRef = rememberUpdatedState(items)
 
     val openApp: (AppItem) -> Unit = { app ->
         val li = context.packageManager.getLaunchIntentForPackage(app.pkg)
@@ -648,6 +667,12 @@ fun LauncherScreen(
         val clean = newList.filter { it.second.isNotEmpty() }
         folders = clean
         prefs.edit().putString("folders", serializeFolders(clean)).apply()
+        val live = clean.map { "f:" + it.first }.toSet()
+        val tidy = order.filter { !it.startsWith("f:") || it in live }
+        if (tidy.size != order.size) {
+            order = tidy
+            saveList("order", tidy)
+        }
     }
 
     fun moveToFolder(pkg: String, name: String) {
@@ -661,6 +686,22 @@ fun LauncherScreen(
     }
 
     fun removeFromFolder(pkg: String) {
+        val owner = folders.firstOrNull { pkg in it.second }
+        if (owner != null) {
+            val keys = items.map { itemKey(it) }.toMutableList()
+            val pos = keys.indexOf("f:" + owner.first)
+            keys.remove(pkg)
+            if (pos >= 0) {
+                val left = owner.second.count { it != pkg }
+                if (left <= 0) {
+                    keys[pos] = pkg
+                } else {
+                    keys.add(pos + 1, pkg)
+                }
+                order = keys
+                saveList("order", keys)
+            }
+        }
         saveFolders(folders.map { it.first to it.second.filter { p -> p != pkg } })
     }
 
@@ -668,22 +709,35 @@ fun LauncherScreen(
         if (new != old && folders.any { it.first == new }) {
             Toast.makeText(context, "Is naam ka folder pehle se hai", Toast.LENGTH_SHORT).show()
         } else {
+            val renamedOrder = order.map { if (it == "f:" + old) "f:" + new else it }
+            order = renamedOrder
+            saveList("order", renamedOrder)
             saveFolders(folders.map { if (it.first == old) new to it.second else it })
         }
     }
 
     fun dissolveFolder(name: String) {
+        val f = folders.firstOrNull { it.first == name }
+        if (f != null) {
+            val keys = items.map { itemKey(it) }.toMutableList()
+            val pos = keys.indexOf("f:" + name)
+            if (pos >= 0) {
+                keys.removeAt(pos)
+                keys.addAll(pos, f.second)
+                order = keys
+                saveList("order", keys)
+            }
+        }
         saveFolders(folders.filter { it.first != name })
     }
 
-    fun moveApp(app: AppItem, index: Int) {
-        if (homeApps.isEmpty()) return
-        val target = (index - folderEntries.size).coerceIn(0, homeApps.size - 1)
-        val list = homeApps.map { it.pkg }.toMutableList()
-        list.remove(app.pkg)
-        list.add(target.coerceAtMost(list.size), app.pkg)
-        order = list
-        saveList("order", list)
+    fun moveItem(key: String, index: Int) {
+        if (items.isEmpty()) return
+        val keys = items.map { itemKey(it) }.toMutableList()
+        keys.remove(key)
+        keys.add(index.coerceIn(0, keys.size), key)
+        order = keys
+        saveList("order", keys)
     }
 
     fun createFolder(a: AppItem, b: AppItem) {
@@ -693,6 +747,16 @@ fun LauncherScreen(
             name = b.category + " " + n
             n += 1
         }
+        val keys = items.map { itemKey(it) }.toMutableList()
+        keys.remove(a.pkg)
+        val pos = keys.indexOf(b.pkg)
+        if (pos >= 0) {
+            keys[pos] = "f:" + name
+        } else {
+            keys.add("f:" + name)
+        }
+        order = keys
+        saveList("order", keys)
         saveFolders(folders + (name to listOf(b.pkg, a.pkg)))
         Toast.makeText(context, "Folder bana: " + name, Toast.LENGTH_SHORT).show()
     }
@@ -757,7 +821,7 @@ fun LauncherScreen(
         } else if (merge && targetItem is HomeItem.FolderEntry) {
             moveToFolder(app.pkg, targetItem.name)
         } else {
-            moveApp(app, index)
+            moveItem(app.pkg, index)
         }
     }
 
@@ -785,15 +849,19 @@ fun LauncherScreen(
         val cellHpx = with(screenDensity) { 100.dp.toPx() }
 
         fun finishDrag() {
-            val app = ctrl.app ?: return
+            val app = ctrl.app
+            val folderName = ctrl.folderName
+            if (app == null && folderName == null) return
             val p = ctrl.pos
             val wasDock = ctrl.fromDock
             ctrl.app = null
+            ctrl.folderName = null
+            ctrl.folderApps = emptyList()
             if (p.y >= dockPos.y - 30f) {
-                if (!wasDock) addToDock(app)
+                if (app != null && !wasDock) addToDock(app)
                 return
             }
-            if (wasDock) removeFromDock(app)
+            if (app != null && wasDock) removeFromDock(app)
             val g = ctrl.pageGrids[pagerState.currentPage - 1] ?: return
             val gw = g[2]
             val rowsHere = g[4].toInt()
@@ -806,14 +874,19 @@ fun LauncherScreen(
             val fx = relX - col
             val fy = relY - row
             val merge = relX >= 0f && relY >= 0f && fx in 0.2f..0.8f && fy in 0.05f..0.85f
-            handleDrop(app, g[3].toInt() + row * cols + col, merge)
+            val idx = g[3].toInt() + row * cols + col
+            if (app != null) {
+                handleDrop(app, idx, merge)
+            } else if (folderName != null) {
+                moveItem("f:" + folderName, idx)
+            }
         }
 
         val finishRef = rememberUpdatedState({ finishDrag() })
 
-        LaunchedEffect(ctrl.app != null) {
+        LaunchedEffect(ctrl.active) {
             var since = 0L
-            while (ctrl.app != null) {
+            while (ctrl.active) {
                 val p = ctrl.pos
                 val margin = screenW * 0.08f
                 val dir = if (p.x < margin) -1 else if (p.x > screenW - margin) 1 else 0
@@ -853,12 +926,25 @@ fun LauncherScreen(
                             hit
                         },
                         onStart = { key, p ->
-                            val a = apps.firstOrNull { it.pkg == key }
-                            if (a != null) {
-                                ctrl.fromDock = dockRef.value.any { it.pkg == key }
-                                ctrl.pos = p
-                                ctrl.app = a
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (key.startsWith("f:")) {
+                                val fe = itemsRef.value
+                                    .filterIsInstance<HomeItem.FolderEntry>()
+                                    .firstOrNull { "f:" + it.name == key }
+                                if (fe != null) {
+                                    ctrl.fromDock = false
+                                    ctrl.pos = p
+                                    ctrl.folderApps = fe.apps
+                                    ctrl.folderName = fe.name
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
+                            } else {
+                                val a = apps.firstOrNull { it.pkg == key }
+                                if (a != null) {
+                                    ctrl.fromDock = dockRef.value.any { it.pkg == key }
+                                    ctrl.pos = p
+                                    ctrl.app = a
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
                             }
                         },
                         onMove = { p -> ctrl.pos = p },
@@ -955,15 +1041,22 @@ fun LauncherScreen(
                                     onLaunch = launch,
                                     onLong = { app -> menuApp = app },
                                     onRemove = { app -> toggleHome(app.pkg) },
-                                    onFolder = { name, list -> openGroup = name to list },
-                                    onFolderLong = { name -> folderMenu = name }
+                                    onFolder = { name, list ->
+                                        openGroup = name to list
+                                        openGroupIsFolder = true
+                                    },
+                                    onFolderLong = { name -> folderMenu = name },
+                                    onFolderRemove = { name -> dissolveFolder(name) }
                                 )
                             }
                         } else {
                             LibraryPage(
                                 apps = visible,
                                 onSearch = { searching = true },
-                                onOpen = { name, list -> openGroup = name to list },
+                                onOpen = { name, list ->
+                                    openGroup = name to list
+                                    openGroupIsFolder = false
+                                },
                                 onLaunch = launch,
                                 onLong = { app -> menuApp = app }
                             )
@@ -1072,6 +1165,15 @@ fun LauncherScreen(
             }
 
             openGroup?.let { group ->
+                val canRename = openGroupIsFolder && folders.any { it.first == group.first }
+                val renameCb: (String) -> Unit = { newName ->
+                    val t = newName.trim()
+                    if (t.isNotBlank() && t != group.first) {
+                        val clash = folders.any { it.first == t }
+                        renameFolder(group.first, t)
+                        if (!clash) openGroup = t to group.second
+                    }
+                }
                 FolderOverlay(
                     title = group.first,
                     apps = group.second,
@@ -1081,7 +1183,8 @@ fun LauncherScreen(
                         openGroup = null
                         launch(app)
                     },
-                    onLong = { app -> menuApp = app }
+                    onLong = { app -> menuApp = app },
+                    onRename = if (canRename) renameCb else null
                 )
             }
 
@@ -1165,6 +1268,7 @@ fun LauncherScreen(
                             pinLauncher.launch(pinIntent)
                         } else {
                             openGroup = "Hidden" to hiddenApps
+                            openGroupIsFolder = false
                         }
                     }
                 )
@@ -1314,6 +1418,10 @@ fun LauncherScreen(
                     onDissolve = {
                         dissolveFolder(fname)
                         folderMenu = null
+                    },
+                    onEdit = {
+                        folderMenu = null
+                        editing = true
                     },
                     onDismiss = { folderMenu = null }
                 )

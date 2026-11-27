@@ -601,6 +601,28 @@ fun AppIcon(
     }
 }
 
+@Composable
+fun FolderGlyph(apps: List<AppItem>, size: Dp) {
+    Box(
+        Modifier.size(size)
+            .glass(IconShape, Color(0x33FFFFFF), Color(0x55FFFFFF))
+            .padding(size * 0.08f)
+    ) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
+            for (r in 0 until 3) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    for (c in 0 until 3) {
+                        val ap = apps.getOrNull(r * 3 + c)
+                        Box(Modifier.size(size * 0.24f)) {
+                            if (ap != null) IconImage(ap, Modifier.fillMaxSize())
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FolderIcon(
@@ -609,12 +631,33 @@ fun FolderIcon(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     size: Dp = 60.dp,
-    badge: Int = 0
+    badge: Int = 0,
+    editing: Boolean = false,
+    wiggle: State<Float>? = null,
+    ghost: Boolean = false,
+    registry: HashMap<String, Rect>? = null,
+    onRemove: () -> Unit = {}
 ) {
     val haptic = LocalHapticFeedback.current
-    Box {
+    val key = "f:" + name
+
+    DisposableEffect(key, registry) {
+        onDispose { registry?.remove(key) }
+    }
+
+    Box(
+        Modifier.graphicsLayer {
+            rotationZ = wiggle?.value ?: 0f
+            alpha = if (ghost) 0.25f else 1f
+        }
+    ) {
         Column(
             modifier = Modifier
+                .onGloballyPositioned {
+                    if (registry != null) {
+                        registry[key] = it.boundsInWindow()
+                    }
+                }
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = {
@@ -625,29 +668,24 @@ fun FolderIcon(
                 .padding(horizontal = 2.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box(
-                Modifier.size(size)
-                    .glass(IconShape, Color(0x33FFFFFF), Color(0x55FFFFFF))
-                    .padding(size * 0.08f)
-            ) {
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
-                    for (r in 0 until 3) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            for (c in 0 until 3) {
-                                val a = apps.getOrNull(r * 3 + c)
-                                Box(Modifier.size(size * 0.24f)) {
-                                    if (a != null) IconImage(a, Modifier.fillMaxSize())
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            FolderGlyph(apps, size)
             Spacer(Modifier.height(4.dp))
             Text(name, style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (badge > 0) {
+        if (badge > 0 && !editing) {
             BadgeDot(badge, Modifier.align(Alignment.TopEnd))
+        }
+        if (editing) {
+            Box(
+                Modifier.align(Alignment.TopStart)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFF3B30))
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("-", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
