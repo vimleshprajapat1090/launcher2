@@ -356,8 +356,7 @@ fun HideManagerDialogOld(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
-            Modifier.clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF22C2C2E))
+            Modifier.glass(RoundedCornerShape(28.dp), Color(0x66000000), Color(0xF21C1C1E))
                 .padding(20.dp)
         ) {
             Text("Apps chhupao / dikhao", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -408,11 +407,12 @@ fun WidgetPickerDialog(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
-            Modifier.clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF22C2C2E))
+            Modifier.glass(RoundedCornerShape(28.dp), Color(0x66000000), Color(0xF21C1C1E))
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp)
         ) {
-            Text("Widgets (Today page)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Text("Widgets (Today + Home)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
             Spacer(Modifier.height(8.dp))
             WIDGET_CATALOG.forEach { entry ->
                 val on = entry.first in selected
@@ -516,8 +516,7 @@ fun CityDialog(current: String, onSave: (String) -> Unit, onDismiss: () -> Unit)
     var text by remember { mutableStateOf(current) }
     Dialog(onDismissRequest = onDismiss) {
         Column(
-            Modifier.clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF22C2C2E))
+            Modifier.glass(RoundedCornerShape(28.dp), Color(0x66000000), Color(0xF21C1C1E))
                 .padding(20.dp)
         ) {
             Text("Weather ka sheher", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -546,8 +545,7 @@ fun FolderMenuDialog(
     var text by remember { mutableStateOf(name) }
     Dialog(onDismissRequest = onDismiss) {
         Column(
-            Modifier.clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF22C2C2E))
+            Modifier.glass(RoundedCornerShape(28.dp), Color(0x66000000), Color(0xF21C1C1E))
                 .padding(20.dp)
         ) {
             Text("Folder: " + name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -591,8 +589,7 @@ fun AppActionDialog(
     var newName by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss) {
         Column(
-            Modifier.clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF22C2C2E))
+            Modifier.glass(RoundedCornerShape(28.dp), Color(0x66000000), Color(0xF21C1C1E))
                 .padding(20.dp)
         ) {
             Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)

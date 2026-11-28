@@ -3,6 +3,8 @@
 package com.iphone.launcher
 
 import android.app.ActivityManager
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.os.Environment
@@ -26,6 +28,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -76,20 +82,68 @@ val WIDGET_CATALOG = listOf(
     "notes" to "Notes (likh sakte ho)",
     "music" to "Music",
     "week" to "Week (hafta ek nazar me)",
-    "memory" to "RAM (memory)"
+    "memory" to "RAM (memory)",
+    "screentime" to "Screen time (aaj ka)"
 )
+
+// Widget ka size: 0 chhota (aadha), 1 bada (poori chaudai), 2 bahut bada (poori chaudai + lamba)
+// Calendar / Notes hamesha bahut bade, Week hamesha bada (inka size badalta nahi)
+object WidgetSizes {
+    val map = mutableStateMapOf<String, Int>()
+    private var loaded = false
+
+    fun ensureLoaded(ctx: Context) {
+        if (loaded) return
+        loaded = true
+        try {
+            val raw = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("wsizes", "") ?: ""
+            raw.split(",").forEach { part ->
+                val kv = part.split(":")
+                if (kv.size == 2) {
+                    val v = kv[1].toIntOrNull()
+                    if (v != null) map[kv[0]] = v.coerceIn(0, 2)
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    fun cycle(ctx: Context, id: String) {
+        if (!canResize(id)) return
+        map[id] = (widgetSize(id) + 1) % 3
+        try {
+            val raw = map.entries.joinToString(",") { it.key + ":" + it.value }
+            ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().putString("wsizes", raw).apply()
+        } catch (e: Exception) {
+        }
+    }
+}
 
 fun isLargeWidget(id: String): Boolean = id == "calendar" || id == "notes"
 
-// Wide widget poori row leta hai par kam unchaai ka hota hai
 fun isWideWidget(id: String): Boolean = id == "week"
 
-fun isFullRow(id: String): Boolean = isLargeWidget(id) || isWideWidget(id)
+fun canResize(id: String): Boolean = !isLargeWidget(id) && !isWideWidget(id)
+
+fun widgetSize(id: String): Int = when {
+    isLargeWidget(id) -> 2
+    isWideWidget(id) -> 1
+    else -> (WidgetSizes.map[id] ?: 0).coerceIn(0, 2)
+}
+
+fun isFullRow(id: String): Boolean = widgetSize(id) >= 1
 
 fun widgetHeight(id: String): Dp = when {
     isLargeWidget(id) -> 260.dp
     isWideWidget(id) -> 128.dp
+    widgetSize(id) == 2 -> 260.dp
     else -> 176.dp
+}
+
+fun sizeLabel(id: String): String = when (widgetSize(id)) {
+    0 -> "Chhota"
+    1 -> "Bada"
+    else -> "Bahut bada"
 }
 
 fun widgetRows(ids: List<String>): List<List<String>> {
@@ -206,8 +260,23 @@ fun WidgetRow(
                         onNotes = onNotes,
                         onWeatherClick = onWeatherClick
                     )
+                    if (editing && canResize(id)) {
+                        Box(
+                            Modifier.align(Alignment.TopEnd)
+                                .padding(8.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xDD0A84FF))
+                                .clickable { WidgetSizes.cycle(ctx, id) }
+                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Text(sizeLabel(id), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
+        }
+        if (ids.size == 1 && !isFullRow(ids[0])) {
+            Spacer(Modifier.weight(1f))
         }
     }
 }
@@ -221,19 +290,63 @@ fun HomeWidgets(
     onWeatherClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
+    val ctx = LocalContext.current
+    remember { WidgetSizes.ensureLoaded(ctx) }
     val data = rememberWidgetData()
-    val ids = selected.filter { !isFullRow(it) }.take(2)
-    Box(
-        Modifier.fillMaxWidth()
-            .height(180.dp)
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {},
-                onLongClick = onLongPress
-            )
-    ) {
-        WidgetRow(ids, data, weather, battery, media, "", {}, onWeatherClick, onLongPress = onLongPress)
+    // Home pe saare chhote aur bade widgets (Calendar / Notes / bahut bade sirf Today page pe)
+    val ids = selected.filter { widgetSize(it) < 2 }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(180.dp)) {
+        val full = maxWidth
+        val half = (maxWidth - 14.dp) / 2
+        if (ids.isEmpty()) {
+            Box(
+                Modifier.fillMaxSize().combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                    onLongClick = onLongPress
+                ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Home ke liye Chhota ya Bada widget chuno (Calendar / Notes sirf Today page pe)",
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        } else {
+            Row(
+                Modifier.fillMaxHeight().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                ids.forEach { id ->
+                    WidgetCard(
+                        Modifier.width(if (widgetSize(id) == 0) half else full).height(widgetHeight(id))
+                    ) {
+                        Box(
+                            Modifier.fillMaxSize().combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { openWidgetTarget(ctx, id) },
+                                onLongClick = onLongPress
+                            )
+                        ) {
+                            WidgetBody(
+                                id = id,
+                                data = data,
+                                weather = weather,
+                                battery = battery,
+                                media = media,
+                                notes = "",
+                                onNotes = {},
+                                onWeatherClick = onWeatherClick
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -253,6 +366,8 @@ fun TodayPage(
     onWeatherClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
+    val todayCtx = LocalContext.current
+    remember { WidgetSizes.ensureLoaded(todayCtx) }
     val data = rememberWidgetData()
     val origin = remember { FloatArray(2) }
     val reorderRef = rememberUpdatedState(onReorder)
@@ -333,7 +448,7 @@ fun TodayPage(
             }
             if (editing) {
                 Text(
-                    "Widget ko pakad ke dusre widget ke upar chhodo, jagah badal jayegi",
+                    "Widget ko pakad ke dusre ke upar chhodo = jagah badlo. Upar-right ke neele button se size badlo (Chhota / Bada / Bahut bada). Home pe Chhota aur Bada dikhte hain.",
                     color = Color(0xFFB0B0B5),
                     fontSize = 12.sp
                 )
@@ -449,6 +564,7 @@ fun WidgetBody(
         "storage" -> StorageBody()
         "week" -> WeekBody()
         "memory" -> MemoryBody()
+        "screentime" -> ScreenTimeBody()
         "notes" -> {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Text("NOTES", color = Color(0xFFFFD60A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -599,6 +715,9 @@ fun openWidgetTarget(context: Context, id: String) {
             "battery" -> Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
             "storage" -> Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
             "memory" -> Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
+            "screentime" ->
+                if (hasUsageAccess(context)) Intent(Settings.ACTION_SETTINGS)
+                else Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
             else -> null
         }
         if (intent != null) {
@@ -697,5 +816,74 @@ fun MemoryBody() {
             }
         }
         BarMeter(usedFraction, if (usedFraction > 0.85f) Color(0xFFFF453A) else Color(0xFFBF5AF2))
+    }
+}
+
+private fun hasUsageAccess(context: Context): Boolean {
+    return try {
+        val ops = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = ops.checkOpNoThrow("android:get_usage_stats", android.os.Process.myUid(), context.packageName)
+        mode == AppOpsManager.MODE_ALLOWED
+    } catch (e: Exception) {
+        false
+    }
+}
+
+private fun todayScreenTimeMs(context: Context): Long {
+    return try {
+        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val stats = usm.queryAndAggregateUsageStats(cal.timeInMillis, System.currentTimeMillis())
+        var total = 0L
+        for ((pkg, st) in stats) {
+            if (pkg != context.packageName) total += st.totalTimeInForeground
+        }
+        total
+    } catch (e: Exception) {
+        0L
+    }
+}
+
+// Aaj phone kitni der chala (Usage access permission chahiye)
+@Composable
+fun ScreenTimeBody() {
+    val context = LocalContext.current
+    val ms by produceState(initialValue = if (hasUsageAccess(context)) todayScreenTimeMs(context) else -1L) {
+        while (true) {
+            delay(60_000)
+            value = if (hasUsageAccess(context)) todayScreenTimeMs(context) else -1L
+        }
+    }
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text("SCREEN TIME", color = Color(0xFFFF9F0A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        if (ms < 0L) {
+            Text(
+                "Tap karke Usage access allow karo",
+                color = Color.White,
+                fontSize = 15.sp
+            )
+            Text("Phir yahan aaj ka time dikhega", color = Color(0xFFB0B0B5), fontSize = 12.sp)
+        } else {
+            val totalMin = ms / 60000L
+            val h = totalMin / 60L
+            val m = totalMin % 60L
+            Column {
+                Text(
+                    if (h > 0L) h.toString() + "h " + m.toString() + "m" else m.toString() + "m",
+                    color = Color.White,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Light
+                )
+                Text("aaj", color = Color(0xFFB0B0B5), fontSize = 13.sp)
+            }
+            BarMeter((ms.toFloat() / (8f * 3600000f)).coerceIn(0f, 1f), Color(0xFFFF9F0A))
+        }
     }
 }
