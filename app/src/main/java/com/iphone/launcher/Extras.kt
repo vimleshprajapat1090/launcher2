@@ -273,7 +273,7 @@ fun importPrefs(context: Context, prefs: SharedPreferences, uri: Uri): Boolean {
     }
 }
 
-fun Modifier.glass(shape: Shape, tint: Color = Color(0x40000000), fallback: Color = Color(0x4DFFFFFF)): Modifier =
+fun Modifier.glassOld(shape: Shape, tint: Color = Color(0x40000000), fallback: Color = Color(0x4DFFFFFF)): Modifier =
     this.clip(shape)
         .frostedAuto(tint, fallback)
         .background(
