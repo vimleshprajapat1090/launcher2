@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
@@ -91,6 +92,17 @@ class NotificationListener : NotificationListenerService() {
     private val handler = Handler(Looper.getMainLooper())
     private var overlay: IslandOverlay? = null
 
+    // Menu ka "Doosre apps ke upar Island" switch yahin se asli me chalta / band hota hai
+    private val launcherPrefs: SharedPreferences by lazy {
+        getSharedPreferences("launcher", Context.MODE_PRIVATE)
+    }
+
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "overlayisland") handler.post { ensureOverlay() }
+    }
+
+    private fun overlayWanted(): Boolean = launcherPrefs.getBoolean("overlayisland", true)
+
     private var lastPlugged = false
     private var lastLevel = -1
 
@@ -136,6 +148,10 @@ class NotificationListener : NotificationListenerService() {
         super.onCreate()
         IslandState.service = this
         try {
+            launcherPrefs.registerOnSharedPreferenceChangeListener(prefListener)
+        } catch (e: Exception) {
+        }
+        try {
             val sticky = registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             if (sticky != null) handleBattery(sticky, true)
         } catch (e: Exception) {
@@ -143,6 +159,10 @@ class NotificationListener : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        try {
+            launcherPrefs.unregisterOnSharedPreferenceChangeListener(prefListener)
+        } catch (e: Exception) {
+        }
         try {
             unregisterReceiver(batteryReceiver)
         } catch (e: Exception) {
@@ -165,8 +185,14 @@ class NotificationListener : NotificationListenerService() {
         update()
     }
 
+    // Switch OFF ho to overlay window poori tarah hata do (Android ka "display over other apps"
+    // wala indicator bhi hat jata hai). ON ho aur permission ho to wapas laga do.
     fun ensureOverlay() {
         try {
+            if (!overlayWanted()) {
+                overlay?.hide()
+                return
+            }
             if (Settings.canDrawOverlays(this)) {
                 if (overlay == null) overlay = IslandOverlay(this)
                 overlay?.show()

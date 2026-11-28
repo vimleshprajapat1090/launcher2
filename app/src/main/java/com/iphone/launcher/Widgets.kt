@@ -2,7 +2,12 @@
 
 package com.iphone.launcher
 
+import android.app.ActivityManager
+import android.content.Context
+import android.content.Intent
 import android.os.Environment
+import android.provider.AlarmClock
+import android.provider.Settings
 import android.os.StatFs
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
@@ -49,6 +54,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,17 +74,30 @@ val WIDGET_CATALOG = listOf(
     "battery" to "Battery",
     "storage" to "Storage",
     "notes" to "Notes (likh sakte ho)",
-    "music" to "Music"
+    "music" to "Music",
+    "week" to "Week (hafta ek nazar me)",
+    "memory" to "RAM (memory)"
 )
 
 fun isLargeWidget(id: String): Boolean = id == "calendar" || id == "notes"
+
+// Wide widget poori row leta hai par kam unchaai ka hota hai
+fun isWideWidget(id: String): Boolean = id == "week"
+
+fun isFullRow(id: String): Boolean = isLargeWidget(id) || isWideWidget(id)
+
+fun widgetHeight(id: String): Dp = when {
+    isLargeWidget(id) -> 260.dp
+    isWideWidget(id) -> 128.dp
+    else -> 176.dp
+}
 
 fun widgetRows(ids: List<String>): List<List<String>> {
     val rows = ArrayList<List<String>>()
     var pending: String? = null
     for (id in ids) {
         val p = pending
-        if (isLargeWidget(id)) {
+        if (isFullRow(id)) {
             if (p != null) {
                 rows.add(listOf(p))
                 pending = null
@@ -145,36 +164,50 @@ fun WidgetRow(
     onNotes: (String) -> Unit,
     onWeatherClick: () -> Unit,
     editing: Boolean = false,
-    drag: WidgetDragState? = null
+    drag: WidgetDragState? = null,
+    onLongPress: () -> Unit = {}
 ) {
+    val ctx = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         ids.forEach { id ->
-            val large = isLargeWidget(id)
             DisposableEffect(id, editing) {
                 onDispose { drag?.bounds?.remove(id) }
             }
             WidgetCard(
                 Modifier.weight(1f)
-                    .height(if (large) 260.dp else 176.dp)
+                    .height(widgetHeight(id))
                     .graphicsLayer { alpha = if (drag != null && drag.key == id) 0.3f else 1f }
                     .onGloballyPositioned {
                         if (editing && drag != null) drag.bounds[id] = it.boundsInWindow()
                     }
             ) {
-                WidgetBody(
-                    id = id,
-                    data = data,
-                    weather = weather,
-                    battery = battery,
-                    media = media,
-                    notes = notes,
-                    onNotes = onNotes,
-                    onWeatherClick = onWeatherClick
-                )
+                // Tap = us widget ka app khule, long-press = home menu (edit mode me kuch nahi)
+                Box(
+                    Modifier.fillMaxSize().then(
+                        if (!editing) {
+                            Modifier.combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { openWidgetTarget(ctx, id) },
+                                onLongClick = onLongPress
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
+                ) {
+                    WidgetBody(
+                        id = id,
+                        data = data,
+                        weather = weather,
+                        battery = battery,
+                        media = media,
+                        notes = notes,
+                        onNotes = onNotes,
+                        onWeatherClick = onWeatherClick
+                    )
+                }
             }
-        }
-        if (ids.size == 1 && !isLargeWidget(ids[0])) {
-            Spacer(Modifier.weight(1f))
         }
     }
 }
@@ -189,7 +222,7 @@ fun HomeWidgets(
     onLongPress: () -> Unit
 ) {
     val data = rememberWidgetData()
-    val ids = selected.filter { !isLargeWidget(it) }.take(2)
+    val ids = selected.filter { !isFullRow(it) }.take(2)
     Box(
         Modifier.fillMaxWidth()
             .height(180.dp)
@@ -200,7 +233,7 @@ fun HomeWidgets(
                 onLongClick = onLongPress
             )
     ) {
-        WidgetRow(ids, data, weather, battery, media, "", {}, onWeatherClick)
+        WidgetRow(ids, data, weather, battery, media, "", {}, onWeatherClick, onLongPress = onLongPress)
     }
 }
 
@@ -313,7 +346,7 @@ fun TodayPage(
                 )
             }
             rows.forEach { rowIds ->
-                WidgetRow(rowIds, data, weather, battery, media, notes, onNotes, onWeatherClick, editing, drag)
+                WidgetRow(rowIds, data, weather, battery, media, notes, onNotes, onWeatherClick, editing, drag, onLongPress)
             }
         }
         val k = drag.key
@@ -414,6 +447,8 @@ fun WidgetBody(
             }
         }
         "storage" -> StorageBody()
+        "week" -> WeekBody()
+        "memory" -> MemoryBody()
         "notes" -> {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Text("NOTES", color = Color(0xFFFFD60A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -551,5 +586,116 @@ fun CalendarBody() {
                 }
             }
         }
+    }
+}
+
+// Widget pe tap karne par kaunsa app / settings khule
+fun openWidgetTarget(context: Context, id: String) {
+    try {
+        val intent: Intent? = when (id) {
+            "clock" -> Intent(AlarmClock.ACTION_SHOW_ALARMS)
+            "date", "calendar", "week" ->
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
+            "battery" -> Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+            "storage" -> Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+            "memory" -> Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
+            else -> null
+        }
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
+    } catch (e: Exception) {
+    }
+}
+
+// Is hafte ke 7 din, aaj wala laal gola
+@Composable
+fun WeekBody() {
+    val cal = Calendar.getInstance()
+    val todayKey = cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR)
+    val back = (cal.get(Calendar.DAY_OF_WEEK) - cal.firstDayOfWeek + 7) % 7
+    val start = cal.clone() as Calendar
+    start.add(Calendar.DAY_OF_MONTH, -back)
+    val names = DateFormatSymbols.getInstance().shortWeekdays
+    val title = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(cal.time).uppercase()
+
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(title, color = Color(0xFFFF453A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth()) {
+            for (i in 0 until 7) {
+                val d = start.clone() as Calendar
+                d.add(Calendar.DAY_OF_MONTH, i)
+                val isToday = d.get(Calendar.YEAR) * 1000 + d.get(Calendar.DAY_OF_YEAR) == todayKey
+                val wd = d.get(Calendar.DAY_OF_WEEK)
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(names[wd].take(1).uppercase(), color = Color(0xFFB0B0B5), fontSize = 11.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                        if (isToday) {
+                            Box(Modifier.size(32.dp).clip(CircleShape).background(Color(0xFFFF453A)))
+                        }
+                        Text(
+                            d.get(Calendar.DAY_OF_MONTH).toString(),
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun readMemory(context: Context): Pair<Long, Long>? {
+    return try {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        Pair(mi.availMem, mi.totalMem)
+    } catch (e: Exception) {
+        null
+    }
+}
+
+// RAM kitni khaali hai (har 5 second me update)
+@Composable
+fun MemoryBody() {
+    val context = LocalContext.current
+    val mem by produceState<Pair<Long, Long>?>(initialValue = readMemory(context)) {
+        while (true) {
+            delay(5_000)
+            value = readMemory(context)
+        }
+    }
+    val m = mem
+    val free = if (m != null) m.first / 1073741824.0 else 0.0
+    val total = if (m != null) m.second / 1073741824.0 else 0.0
+    val usedFraction = if (m != null && m.second > 0L) 1f - (m.first.toFloat() / m.second.toFloat()) else 0f
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text("RAM", color = Color(0xFFBF5AF2), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Column {
+            Text(
+                if (m != null) String.format(Locale.getDefault(), "%.1f GB free", free) else "--",
+                color = Color.White,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Light
+            )
+            if (m != null) {
+                Text(
+                    String.format(Locale.getDefault(), "of %.1f GB", total),
+                    color = Color(0xFFB0B0B5),
+                    fontSize = 13.sp
+                )
+            }
+        }
+        BarMeter(usedFraction, if (usedFraction > 0.85f) Color(0xFFFF453A) else Color(0xFFBF5AF2))
     }
 }
