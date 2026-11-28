@@ -443,7 +443,7 @@ fun CalendarIcon(modifier: Modifier) {
 }
 
 @Composable
-fun IconImage(app: AppItem, modifier: Modifier) {
+fun IconImageOld(app: AppItem, modifier: Modifier) {
     val kind = remember(app.pkg) { iosKind(app.pkg) }
     Box(modifier.clip(IconShape)) {
         if (kind == 20) {
@@ -490,7 +490,7 @@ fun IconImage(app: AppItem, modifier: Modifier) {
 }
 
 @Composable
-fun BadgeDot(count: Int, modifier: Modifier) {
+fun BadgeDotOld(count: Int, modifier: Modifier) {
     Box(
         modifier.defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
             .clip(CircleShape)
