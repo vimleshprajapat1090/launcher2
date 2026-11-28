@@ -1329,6 +1329,23 @@ fun LauncherScreen(
                         }
                     )
                     add(
+                        MenuEntry("Charging island test (4 sec)") {
+                            val t = ToastInfo(
+                                "test" + System.currentTimeMillis(),
+                                context.packageName,
+                                "Charging",
+                                "54% battery",
+                                null,
+                                null
+                            )
+                            IslandState.toast = t
+                            scope.launch {
+                                delay(4000)
+                                if (IslandState.toast?.key == t.key) IslandState.toast = null
+                            }
+                        }
+                    )
+                    add(
                         MenuEntry("Call island test (8 sec)") {
                             IslandState.call = CallInfo("Test Caller", "Incoming call", emptyList())
                             scope.launch {
@@ -1542,7 +1559,8 @@ fun LauncherScreen(
                     call = call,
                     hasAccess = hasAccess,
                     onNeedAccess = onNeedAccess,
-                    toast = IslandState.toast
+                    toast = IslandState.toast,
+                    timer = IslandState.timer
                 )
             }
 

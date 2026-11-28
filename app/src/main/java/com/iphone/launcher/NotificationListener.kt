@@ -3,7 +3,11 @@ package com.iphone.launcher
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -20,6 +24,13 @@ data class CallAction(val title: String, val intent: PendingIntent?)
 
 data class CallInfo(val title: String, val text: String, val actions: List<CallAction>)
 
+class TimerInfo(
+    val title: String,
+    val whenMs: Long,
+    val countDown: Boolean,
+    val intent: PendingIntent?
+)
+
 class ToastInfo(
     val key: String,
     val pkg: String,
@@ -33,6 +44,7 @@ object IslandState {
     var call by mutableStateOf<CallInfo?>(null)
     var badges by mutableStateOf<Map<String, Int>>(emptyMap())
     var toast by mutableStateOf<ToastInfo?>(null)
+    var timer by mutableStateOf<TimerInfo?>(null)
     var launcherVisible by mutableStateOf(true)
     var service: NotificationListener? = null
     var launcherView: java.lang.ref.WeakReference<android.view.View>? = null
@@ -56,16 +68,85 @@ object IslandState {
     }
 }
 
+private fun boltIcon(color: Int): ImageBitmap {
+    val bmp = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888)
+    val c = android.graphics.Canvas(bmp)
+    val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    p.color = color
+    c.drawRoundRect(android.graphics.RectF(0f, 0f, 96f, 96f), 24f, 24f, p)
+    p.color = 0xFFFFFFFF.toInt()
+    val path = android.graphics.Path()
+    path.moveTo(54f, 12f)
+    path.lineTo(24f, 54f)
+    path.lineTo(46f, 54f)
+    path.lineTo(40f, 84f)
+    path.lineTo(72f, 40f)
+    path.lineTo(50f, 40f)
+    path.close()
+    c.drawPath(path, p)
+    return bmp.asImageBitmap()
+}
+
 class NotificationListener : NotificationListenerService() {
     private val handler = Handler(Looper.getMainLooper())
     private var overlay: IslandOverlay? = null
 
+    private var lastPlugged = false
+    private var lastLevel = -1
+
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent != null) handleBattery(intent, false)
+        }
+    }
+
+    private fun handleBattery(i: Intent, silent: Boolean) {
+        val level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+        if (level < 0 || scale <= 0) return
+        val pct = level * 100 / scale
+        val plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+        if (!silent) {
+            if (plugged && !lastPlugged) {
+                showBatteryToast("Charging", pct.toString() + "% battery", 0xFF30D158.toInt())
+            } else if (plugged && pct >= 100 && lastLevel in 0..99) {
+                showBatteryToast("Fully charged", "Battery 100%", 0xFF30D158.toInt())
+            } else if (!plugged && pct <= 20 && lastLevel > 20) {
+                showBatteryToast("Battery low", pct.toString() + "% bacha hai", 0xFFFF453A.toInt())
+            }
+        }
+        lastPlugged = plugged
+        lastLevel = pct
+    }
+
+    private fun showBatteryToast(title: String, text: String, color: Int) {
+        val icon: ImageBitmap? = try {
+            boltIcon(color)
+        } catch (e: Exception) {
+            null
+        }
+        val info = ToastInfo("battery" + System.currentTimeMillis(), packageName, title, text, null, icon)
+        handler.post { IslandState.toast = info }
+        handler.postDelayed({
+            if (IslandState.toast?.key == info.key) IslandState.toast = null
+        }, 4000L)
+    }
+
     override fun onCreate() {
         super.onCreate()
         IslandState.service = this
+        try {
+            val sticky = registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            if (sticky != null) handleBattery(sticky, true)
+        } catch (e: Exception) {
+        }
     }
 
     override fun onDestroy() {
+        try {
+            unregisterReceiver(batteryReceiver)
+        } catch (e: Exception) {
+        }
         try {
             overlay?.hide()
         } catch (e: Exception) {
@@ -108,6 +189,7 @@ class NotificationListener : NotificationListenerService() {
             IslandState.call = null
             IslandState.badges = emptyMap()
             IslandState.toast = null
+            IslandState.timer = null
         }
     }
 
@@ -177,6 +259,34 @@ class NotificationListener : NotificationListenerService() {
             null
         }
 
+        val timerInfo: TimerInfo? = if (info != null) {
+            null
+        } else {
+            try {
+                activeNotifications
+                    ?.firstOrNull { sbn ->
+                        val nn = sbn.notification
+                        sbn.packageName != packageName &&
+                            sbn.isOngoing &&
+                            nn.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER) &&
+                            nn.category != Notification.CATEGORY_CALL &&
+                            nn.category != Notification.CATEGORY_TRANSPORT &&
+                            !isCallNotification(sbn)
+                    }
+                    ?.let { sbn ->
+                        val nn = sbn.notification
+                        TimerInfo(
+                            title = nn.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "Timer",
+                            whenMs = nn.`when`,
+                            countDown = nn.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN),
+                            intent = nn.contentIntent
+                        )
+                    }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
         val counts = HashMap<String, Int>()
         try {
             activeNotifications?.forEach { sbn ->
@@ -191,6 +301,7 @@ class NotificationListener : NotificationListenerService() {
         handler.post {
             IslandState.call = info
             IslandState.badges = counts
+            IslandState.timer = timerInfo
         }
     }
 }

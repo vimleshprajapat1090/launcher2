@@ -1,5 +1,6 @@
 package com.iphone.launcher
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.hardware.camera2.CameraCharacteristics
@@ -35,6 +36,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,11 +46,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 fun openSettings(context: Context, action: String) {
     try {
@@ -122,13 +128,95 @@ fun readAutoRotate(context: Context): Boolean {
     }
 }
 
+fun readAutoBrightness(context: Context): Boolean {
+    return try {
+        Settings.System.getInt(
+            context.contentResolver,
+            Settings.System.SCREEN_BRIGHTNESS_MODE,
+            Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+        ) == Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun setAutoBrightness(context: Context, on: Boolean) {
+    try {
+        Settings.System.putInt(
+            context.contentResolver,
+            Settings.System.SCREEN_BRIGHTNESS_MODE,
+            if (on) Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC else Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+        )
+    } catch (e: Exception) {
+    }
+}
+
+fun readDnd(context: Context): Boolean {
+    return try {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val f = nm.currentInterruptionFilter
+        f != NotificationManager.INTERRUPTION_FILTER_ALL && f != NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun toggleDnd(context: Context) {
+    try {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.isNotificationPolicyAccessGranted) {
+            val filter = if (readDnd(context)) {
+                NotificationManager.INTERRUPTION_FILTER_ALL
+            } else {
+                NotificationManager.INTERRUPTION_FILTER_PRIORITY
+            }
+            nm.setInterruptionFilter(filter)
+        } else {
+            Toast.makeText(context, "DND ke liye ek baar access do", Toast.LENGTH_SHORT).show()
+            openSettings(context, Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+        }
+    } catch (e: Exception) {
+        Toast.makeText(context, "DND badal nahi paaya", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun appLabel(context: Context, pkg: String?): String {
+    if (pkg.isNullOrBlank()) return ""
+    return try {
+        val pm = context.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    } catch (e: Exception) {
+        ""
+    }
+}
+
+@Composable
+fun MiniChip(label: String, on: Boolean, onClick: () -> Unit) {
+    val haptic = LocalHapticFeedback.current
+    Box(
+        Modifier.clip(RoundedCornerShape(12.dp))
+            .background(if (on) Color(0xFF0A84FF) else Color(0x55FFFFFF))
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
+            .padding(horizontal = 10.dp, vertical = 3.dp)
+    ) {
+        Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
 @Composable
 fun CCCircle(label: String, on: Boolean, onClick: () -> Unit) {
+    val haptic = LocalHapticFeedback.current
     Box(
         Modifier.size(56.dp)
             .clip(CircleShape)
             .background(if (on) Color(0xFF0A84FF) else Color(0x55FFFFFF))
-            .clickable { onClick() },
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            },
         contentAlignment = Alignment.Center
     ) {
         Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -151,15 +239,66 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
     val audio = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val maxVol = remember { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat() }
     var volume by remember { mutableStateOf(audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()) }
+    var preMute by remember { mutableStateOf(0f) }
     var bright by remember { mutableStateOf(readBrightness(context).coerceIn(0.05f, 1f)) }
+    var autoBright by remember { mutableStateOf(readAutoBrightness(context)) }
     var asked by remember { mutableStateOf(false) }
     var torch by remember { mutableStateOf(false) }
     var rotateOn by remember { mutableStateOf(readAutoRotate(context)) }
     var timeout by remember { mutableStateOf(readTimeout(context)) }
-    val wifiOn = remember { readWifiOn(context) }
-    val btOn = remember { readGlobal(context, "bluetooth_on") }
-    val airOn = remember { readGlobal(context, Settings.Global.AIRPLANE_MODE_ON) }
+    var wifiOn by remember { mutableStateOf(readWifiOn(context)) }
+    var btOn by remember { mutableStateOf(readGlobal(context, "bluetooth_on")) }
+    var airOn by remember { mutableStateOf(readGlobal(context, Settings.Global.AIRPLANE_MODE_ON)) }
+    var dataOn by remember { mutableStateOf(readGlobal(context, "mobile_data")) }
+    var dndOn by remember { mutableStateOf(readDnd(context)) }
+    var lastTouch by remember { mutableStateOf(0L) }
     val info = media.info
+    val sourceName = remember(info?.pkg) { appLabel(context, info?.pkg) }
+
+    // Hardware volume buttons, brightness aur toggles ko live sync rakhta hai
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            if (now - lastTouch > 1200L) {
+                volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
+                bright = readBrightness(context).coerceIn(0.05f, 1f)
+            }
+            autoBright = readAutoBrightness(context)
+            wifiOn = readWifiOn(context)
+            btOn = readGlobal(context, "bluetooth_on")
+            airOn = readGlobal(context, Settings.Global.AIRPLANE_MODE_ON)
+            dataOn = readGlobal(context, "mobile_data")
+            dndOn = readDnd(context)
+            rotateOn = readAutoRotate(context)
+            timeout = readTimeout(context)
+            delay(700L)
+        }
+    }
+
+    // Torch ki asli state sync (kisi aur jagah se on/off ho to bhi)
+    DisposableEffect(Unit) {
+        var manager: CameraManager? = null
+        var callback: CameraManager.TorchCallback? = null
+        try {
+            val m = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cb = object : CameraManager.TorchCallback() {
+                override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+                    torch = enabled
+                }
+            }
+            m.registerTorchCallback(cb, null)
+            manager = m
+            callback = cb
+        } catch (e: Exception) {
+        }
+        onDispose {
+            try {
+                val cb2 = callback
+                if (cb2 != null) manager?.unregisterTorchCallback(cb2)
+            } catch (e: Exception) {
+            }
+        }
+    }
 
     Box(
         Modifier.fillMaxSize()
@@ -181,18 +320,29 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                     Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text("Brightness", color = Color.White, fontSize = 12.sp)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Brightness", color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        MiniChip("Auto", autoBright) {
+                            if (Settings.System.canWrite(context)) {
+                                val next = !autoBright
+                                setAutoBrightness(context, next)
+                                autoBright = next
+                            } else {
+                                openWriteSettings(context)
+                            }
+                        }
+                    }
                     Slider(
                         value = bright,
                         onValueChange = { v ->
+                            lastTouch = System.currentTimeMillis()
                             if (Settings.System.canWrite(context)) {
                                 bright = v
+                                autoBright = false
                                 setBrightness(context, v)
                             } else if (!asked) {
                                 asked = true
                                 openWriteSettings(context)
-                            } else {
-                                bright = bright
                             }
                         },
                         valueRange = 0.05f..1f,
@@ -216,7 +366,7 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                             CCCircle("Plane", airOn) { openSettings(context, Settings.ACTION_AIRPLANE_MODE_SETTINGS) }
-                            CCCircle("Data", false) { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
+                            CCCircle("Data", dataOn) { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                         }
                     }
                 }
@@ -226,6 +376,16 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
+                            if (info != null && sourceName.isNotBlank()) {
+                                Text(
+                                    sourceName,
+                                    color = Color(0xFF0A84FF),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Text(
                                 if (info != null) info.title else "Not Playing",
                                 color = Color.White,
@@ -263,6 +423,14 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         CCCircle("Calc", false) { openCalculator(context) }
                     }
                 }
+                CCCard(Modifier.size(90.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CCCircle("DND", dndOn) {
+                            toggleDnd(context)
+                            dndOn = readDnd(context)
+                        }
+                    }
+                }
             }
             CCCard(Modifier.fillMaxWidth().height(90.dp)) {
                 Column(
@@ -274,7 +442,7 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         Modifier.padding(top = 6.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(15000 to "15s", 30000 to "30s", 60000 to "1m", 300000 to "5m").forEach { opt ->
+                        listOf(15000 to "15s", 30000 to "30s", 60000 to "1m", 120000 to "2m", 300000 to "5m").forEach { opt ->
                             TimeoutChip(opt.second, timeout == opt.first) {
                                 if (Settings.System.canWrite(context)) {
                                     try {
@@ -304,8 +472,7 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                                     cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                                 }
                                 if (id != null) {
-                                    torch = !torch
-                                    cm.setTorchMode(id, torch)
+                                    cm.setTorchMode(id, !torch)
                                 } else {
                                     Toast.makeText(context, "Is device me flash nahi hai", Toast.LENGTH_SHORT).show()
                                 }
@@ -340,12 +507,33 @@ fun ControlCenter(media: MediaWatcher, onClose: () -> Unit) {
                         Modifier.fillMaxSize().padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text("Volume", color = Color.White, fontSize = 12.sp)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Volume", color = Color.White, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            MiniChip(if (volume <= 0f) "Unmute" else "Mute", volume <= 0f) {
+                                lastTouch = System.currentTimeMillis()
+                                try {
+                                    if (volume <= 0f) {
+                                        val back = if (preMute > 0f) preMute else (maxVol / 3f).coerceAtLeast(1f)
+                                        volume = back
+                                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, back.toInt(), 0)
+                                    } else {
+                                        preMute = volume
+                                        volume = 0f
+                                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                                    }
+                                } catch (e: Exception) {
+                                }
+                            }
+                        }
                         Slider(
                             value = volume,
                             onValueChange = { v ->
+                                lastTouch = System.currentTimeMillis()
                                 volume = v
-                                audio.setStreamVolume(AudioManager.STREAM_MUSIC, v.toInt(), 0)
+                                try {
+                                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, v.toInt(), 0)
+                                } catch (e: Exception) {
+                                }
                             },
                             valueRange = 0f..maxVol,
                             colors = SliderDefaults.colors(
@@ -387,10 +575,14 @@ fun openCalculator(context: Context) {
 
 @Composable
 fun TimeoutChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val haptic = LocalHapticFeedback.current
     Box(
         Modifier.clip(RoundedCornerShape(14.dp))
             .background(if (selected) Color(0xFF0A84FF) else Color(0x55FFFFFF))
-            .clickable { onClick() }
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
             .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
         Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)

@@ -16,6 +16,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -55,7 +58,8 @@ data class MediaInfo(
     val title: String,
     val artist: String,
     val playing: Boolean,
-    val art: ImageBitmap?
+    val art: ImageBitmap?,
+    val pkg: String = ""
 )
 
 class MediaWatcher(private val context: Context) {
@@ -145,7 +149,7 @@ class MediaWatcher(private val context: Context) {
                 ?: ""
             val art = (md.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
                 ?: md.getBitmap(MediaMetadata.METADATA_KEY_ART))?.asImageBitmap()
-            info = MediaInfo(title, artist, playing, art)
+            info = MediaInfo(title, artist, playing, art, c.packageName ?: "")
             if (playing) dismissed = false
         } else {
             val last = info
@@ -203,13 +207,16 @@ fun DynamicIsland(
     hasAccess: Boolean,
     onNeedAccess: () -> Unit,
     toast: ToastInfo? = null,
-    showIdle: Boolean = true
+    showIdle: Boolean = true,
+    timer: TimerInfo? = null
 ) {
     val info = if (media.dismissed) null else media.info
     var expanded by remember { mutableStateOf(false) }
+    val dragSum = remember { floatArrayOf(0f) }
     val mode = when {
         call != null -> 2
         toast != null -> 3
+        timer != null -> 4
         info != null -> 1
         else -> 0
     }
@@ -225,12 +232,14 @@ fun DynamicIsland(
     val targetW = when (mode) {
         2 -> 320.dp
         3 -> 320.dp
+        4 -> 200.dp
         1 -> if (expanded) 320.dp else 200.dp
         else -> 112.dp
     }
     val targetH = when (mode) {
         2 -> 128.dp
         3 -> 88.dp
+        4 -> 36.dp
         1 -> if (expanded) 124.dp else 36.dp
         else -> 32.dp
     }
@@ -243,6 +252,25 @@ fun DynamicIsland(
             .height(h)
             .clip(RoundedCornerShape(radius))
             .background(Color.Black)
+            .pointerInput(mode, expanded) {
+                detectVerticalDragGestures(
+                    onDragStart = { dragSum[0] = 0f },
+                    onDragEnd = {
+                        val d = dragSum[0]
+                        if (d < -30f) {
+                            if (mode == 1) {
+                                if (expanded) expanded = false else media.dismiss()
+                            } else if (mode == 3) {
+                                IslandState.toast = null
+                            }
+                        } else if (d > 30f) {
+                            if (mode == 1) expanded = true
+                        }
+                        dragSum[0] = 0f
+                    },
+                    onVerticalDrag = { _, dy -> dragSum[0] += dy }
+                )
+            }
             .clickable {
                 if (mode == 0) {
                     if (!hasAccess) onNeedAccess()
@@ -254,6 +282,11 @@ fun DynamicIsland(
                     } catch (e: Exception) {
                     }
                     IslandState.toast = null
+                } else if (mode == 4 && timer != null) {
+                    try {
+                        timer.intent?.send()
+                    } catch (e: Exception) {
+                    }
                 }
             },
         contentAlignment = Alignment.Center
@@ -264,7 +297,50 @@ fun DynamicIsland(
             CallContent(call)
         } else if (mode == 3 && toast != null) {
             ToastContent(toast)
+        } else if (mode == 4 && timer != null) {
+            TimerContent(timer)
         }
+    }
+}
+
+@Composable
+fun TimerContent(t: TimerInfo) {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(t.whenMs) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(500L)
+        }
+    }
+    val ms = if (t.countDown) t.whenMs - now else now - t.whenMs
+    val total = (ms / 1000L).coerceAtLeast(0L)
+    val h = total / 3600L
+    val m = (total % 3600L) / 60L
+    val s = total % 60L
+    val label = if (h > 0L) {
+        String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, s)
+    } else {
+        String.format(java.util.Locale.US, "%02d:%02d", m, s)
+    }
+    val orange = Color(0xFFFF9F0A)
+    Row(
+        Modifier.fillMaxSize().padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Canvas(Modifier.size(20.dp)) {
+            drawCircle(orange, radius = size.minDimension / 2f - 2f, style = Stroke(width = 3f))
+            drawLine(orange, center, Offset(center.x, center.y - size.height * 0.3f), strokeWidth = 3f)
+            drawLine(orange, center, Offset(center.x + size.width * 0.22f, center.y), strokeWidth = 3f)
+        }
+        Text(
+            t.title,
+            color = Color.White,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+        )
+        Text(label, color = orange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     }
 }
 

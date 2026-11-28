@@ -92,14 +92,17 @@ class IslandOverlay(private val context: Context) : LifecycleOwner, SavedStateRe
 fun OverlayIsland() {
     val context = LocalContext.current
     val media = remember { IslandState.media(context) }
+    val prefs = remember { context.getSharedPreferences("launcher", Context.MODE_PRIVATE) }
     var launcherUp by remember { mutableStateOf(IslandState.launcherReallyVisible()) }
+    var overlayOn by remember { mutableStateOf(prefs.getBoolean("overlayisland", true)) }
     LaunchedEffect(Unit) {
         while (true) {
             launcherUp = IslandState.launcherReallyVisible()
+            overlayOn = prefs.getBoolean("overlayisland", true)
             delay(400)
         }
     }
-    if (!launcherUp) {
+    if (overlayOn && !launcherUp) {
         CompositionLocalProvider(
             LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = AppFont)
         ) {
@@ -109,7 +112,8 @@ fun OverlayIsland() {
                 hasAccess = true,
                 onNeedAccess = {},
                 toast = IslandState.toast,
-                showIdle = false
+                showIdle = false,
+                timer = IslandState.timer
             )
         }
     }
