@@ -543,6 +543,21 @@ fun LauncherScreen(
         }
     }
 
+    val openHiddenApps: () -> Unit = {
+        val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val pinIntent = km.createConfirmDeviceCredentialIntent(
+            "Hidden apps",
+            "Phone ka PIN, pattern ya fingerprint daalo"
+        )
+        if (pinIntent != null) {
+            pinLauncher.launch(pinIntent)
+        } else {
+            openGroup = "Hidden" to hiddenApps
+            openGroupIsFolder = false
+        }
+    }
+    val openHiddenRef = rememberUpdatedState(openHiddenApps)
+
     val dock = dockPkgs.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }
         .take(dockMax)
         .ifEmpty { visible.take(4) }
@@ -834,7 +849,7 @@ fun LauncherScreen(
         val iconSize = (baseIcon + (iconStep - 1) * 8f).dp
         val rows = ((maxHeight.value - 290f) / 100f).toInt().coerceIn(2, 8)
         val capacity = cols * rows
-        val showHomeWidgets = homeWidgets && widgets.isNotEmpty()
+        val showHomeWidgets = false
         val firstRows = if (showHomeWidgets) (rows - 2).coerceAtLeast(0) else rows
         val firstCount = cols * firstRows
         val pages: List<List<HomeItem>> =
@@ -964,6 +979,7 @@ fun LauncherScreen(
 
             Column(
                 Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 44.dp)
+                    .pointerInput(Unit) { detectTwoFingerSwipeUp { openHiddenRef.value() } }
             ) {
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
                     Box(
@@ -996,7 +1012,13 @@ fun LauncherScreen(
                                 onDoneEdit = { widgetEditing = false },
                                 onPick = { showWidgetPicker = true },
                                 onWeatherClick = { showCityDialog = true },
-                                onLongPress = { widgetEditing = true }
+                                onLongPress = {},
+                                onRemove = { wid ->
+                                    val l = widgets - wid
+                                    widgets = l
+                                    saveList("widgets", l)
+                                },
+                                pageCount = pages.size
                             )
                         } else if (page <= pages.size) {
                             val pageIndex = page - 1
@@ -1059,6 +1081,27 @@ fun LauncherScreen(
                                 },
                                 onLaunch = launch,
                                 onLong = { app -> menuApp = app }
+                            )
+                        }
+                        if (page >= 1 && page <= pages.size) {
+                            WidgetLayer(
+                                page = page,
+                                enabled = widgets,
+                                weather = weather,
+                                battery = battery,
+                                media = media,
+                                notes = notes,
+                                onNotes = { v ->
+                                    notes = v
+                                    prefs.edit().putString("notes", v).apply()
+                                },
+                                onWeatherClick = { showCityDialog = true },
+                                onRemove = { wid ->
+                                    val l = widgets - wid
+                                    widgets = l
+                                    saveList("widgets", l)
+                                },
+                                pageCount = pages.size
                             )
                         }
                     }
@@ -1218,11 +1261,6 @@ fun LauncherScreen(
                         pageEffect = n
                         prefs.edit().putInt("pageeffect", n).apply()
                     },
-                    MenuEntry("Home pe widgets: " + (if (homeWidgets) "ON" else "OFF"), true) {
-                        val v = !homeWidgets
-                        homeWidgets = v
-                        prefs.edit().putBoolean("homewidgets", v).apply()
-                    },
                     MenuEntry("Layout reset (icons ki jagah wapas)") {
                         order = emptyList()
                         noHome = emptyList()
@@ -1234,10 +1272,6 @@ fun LauncherScreen(
 
                 val widgetEntries = listOf(
                     MenuEntry("Widgets chuno (add / hatao)") { showWidgetPicker = true },
-                    MenuEntry("Widgets ki jagah badlo") {
-                        widgetEditing = true
-                        scope.launch { pagerState.animateScrollToPage(0) }
-                    },
                     MenuEntry("Weather ka sheher: " + (if (weatherCity.isBlank()) "set nahi" else weatherCity)) {
                         showCityDialog = true
                     }
@@ -1255,23 +1289,6 @@ fun LauncherScreen(
                         })
                     }
                 }
-
-                val appEntries = listOf(
-                    MenuEntry("Apps chhupao / dikhao") { showHideManager = true },
-                    MenuEntry("Hidden apps dekho (" + hiddenApps.size + ")") {
-                        val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-                        val pinIntent = km.createConfirmDeviceCredentialIntent(
-                            "Hidden apps",
-                            "Phone ka PIN, pattern ya fingerprint daalo"
-                        )
-                        if (pinIntent != null) {
-                            pinLauncher.launch(pinIntent)
-                        } else {
-                            openGroup = "Hidden" to hiddenApps
-                            openGroupIsFolder = false
-                        }
-                    }
-                )
 
                 var overlayWanted by remember { mutableStateOf(prefs.getBoolean("overlayisland", true)) }
                 val islandEntries = buildList<MenuEntry> {
@@ -1384,7 +1401,6 @@ fun LauncherScreen(
                         "Home Screen" to homeEntries,
                         "Widgets" to widgetEntries,
                         "Wallpaper" to wallEntries,
-                        "Apps (hide / dikhao)" to appEntries,
                         "Island aur Calls" to islandEntries,
                         "Phone" to phoneEntries
                     ),

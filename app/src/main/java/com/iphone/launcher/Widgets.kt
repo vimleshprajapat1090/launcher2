@@ -5,6 +5,13 @@ package com.iphone.launcher
 import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
+import android.widget.Toast
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import android.content.Context
 import android.content.Intent
 import android.os.Environment
@@ -86,87 +93,353 @@ val WIDGET_CATALOG = listOf(
     "screentime" to "Screen time (aaj ka)"
 )
 
-// Widget ka size: 0 chhota (aadha), 1 bada (poori chaudai), 2 bahut bada (poori chaudai + lamba)
-// Calendar / Notes hamesha bahut bade, Week hamesha bada (inka size badalta nahi)
-object WidgetSizes {
-    val map = mutableStateMapOf<String, Int>()
+// ---------------------------------------------------------------
+// FREE-FORM WIDGETS
+// Har widget kisi bhi page (Today ya home) par kahin bhi rakh sakte ho
+// aur kone ke button se jitna chaho utna bada / chhota kar sakte ho.
+// ---------------------------------------------------------------
+
+fun isLargeWidget(id: String): Boolean = id == "calendar" || id == "notes"
+
+fun isWideWidget(id: String): Boolean = id == "week"
+
+// page: 0 = Today, 1.. = home pages. x, y, w, h dp me.
+class WPlace(val page: Int, val x: Float, val y: Float, val w: Float, val h: Float)
+
+object WidgetStore {
+    val places = mutableStateMapOf<String, WPlace>()
+    val selected = mutableStateOf<String?>(null)
     private var loaded = false
 
     fun ensureLoaded(ctx: Context) {
         if (loaded) return
         loaded = true
         try {
-            val raw = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("wsizes", "") ?: ""
-            raw.split(",").forEach { part ->
-                val kv = part.split(":")
-                if (kv.size == 2) {
-                    val v = kv[1].toIntOrNull()
-                    if (v != null) map[kv[0]] = v.coerceIn(0, 2)
+            val raw = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("wplaces", "") ?: ""
+            raw.split(";").forEach { rec ->
+                val f = rec.split("|")
+                if (f.size == 6) {
+                    val pg = f[1].toIntOrNull()
+                    val x = f[2].toFloatOrNull()
+                    val y = f[3].toFloatOrNull()
+                    val w = f[4].toFloatOrNull()
+                    val h = f[5].toFloatOrNull()
+                    if (pg != null && x != null && y != null && w != null && h != null) {
+                        places[f[0]] = WPlace(pg, x, y, w, h)
+                    }
                 }
             }
         } catch (e: Exception) {
         }
     }
 
-    fun cycle(ctx: Context, id: String) {
-        if (!canResize(id)) return
-        map[id] = (widgetSize(id) + 1) % 3
+    fun save(ctx: Context) {
         try {
-            val raw = map.entries.joinToString(",") { it.key + ":" + it.value }
-            ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().putString("wsizes", raw).apply()
+            val raw = places.entries.joinToString(";") { e ->
+                val p = e.value
+                e.key + "|" + p.page + "|" + p.x + "|" + p.y + "|" + p.w + "|" + p.h
+            }
+            ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().putString("wplaces", raw).apply()
         } catch (e: Exception) {
         }
     }
 }
 
-fun isLargeWidget(id: String): Boolean = id == "calendar" || id == "notes"
-
-fun isWideWidget(id: String): Boolean = id == "week"
-
-fun canResize(id: String): Boolean = !isLargeWidget(id) && !isWideWidget(id)
-
-fun widgetSize(id: String): Int = when {
-    isLargeWidget(id) -> 2
-    isWideWidget(id) -> 1
-    else -> (WidgetSizes.map[id] ?: 0).coerceIn(0, 2)
-}
-
-fun isFullRow(id: String): Boolean = widgetSize(id) >= 1
-
-fun widgetHeight(id: String): Dp = when {
-    isLargeWidget(id) -> 260.dp
-    isWideWidget(id) -> 128.dp
-    widgetSize(id) == 2 -> 260.dp
-    else -> 176.dp
-}
-
-fun sizeLabel(id: String): String = when (widgetSize(id)) {
-    0 -> "Chhota"
-    1 -> "Bada"
-    else -> "Bahut bada"
-}
-
-fun widgetRows(ids: List<String>): List<List<String>> {
-    val rows = ArrayList<List<String>>()
-    var pending: String? = null
+// Jin widgets ki jagah abhi tak tay nahi hui, unhe Today page pe saaf tarah se laga do
+private fun defaultPlaces(ids: List<String>, availW: Float, startY: Float): Map<String, WPlace> {
+    val out = HashMap<String, WPlace>()
+    val margin = 16f
+    val gap = 12f
+    val full = (availW - margin * 2f).coerceAtLeast(120f)
+    val half = ((full - gap) / 2f).coerceAtLeast(100f)
+    var y = startY
+    var col = 0
     for (id in ids) {
-        val p = pending
-        if (isFullRow(id)) {
-            if (p != null) {
-                rows.add(listOf(p))
-                pending = null
+        if (isLargeWidget(id) || isWideWidget(id)) {
+            if (col == 1) {
+                y += 150f + gap
+                col = 0
             }
-            rows.add(listOf(id))
-        } else if (p == null) {
-            pending = id
+            val h = if (isWideWidget(id)) 128f else 260f
+            out[id] = WPlace(0, margin, y, full, h)
+            y += h + gap
         } else {
-            rows.add(listOf(p, id))
-            pending = null
+            val x = margin + col * (half + gap)
+            out[id] = WPlace(0, x, y, half, 150f)
+            if (col == 0) {
+                col = 1
+            } else {
+                col = 0
+                y += 150f + gap
+            }
         }
     }
-    val last = pending
-    if (last != null) rows.add(listOf(last))
-    return rows
+    return out
+}
+
+@Composable
+private fun BarPill(text: String, bg: Color, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(16.dp))
+            .background(bg)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+    ) {
+        Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun WidgetLayer(
+    page: Int,
+    enabled: List<String>,
+    weather: WeatherNow?,
+    battery: Int,
+    media: MediaWatcher,
+    notes: String,
+    onNotes: (String) -> Unit,
+    onWeatherClick: () -> Unit,
+    onRemove: (String) -> Unit,
+    pageCount: Int
+) {
+    val ctx = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    remember { WidgetStore.ensureLoaded(ctx) }
+    val data = rememberWidgetData()
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val availW = maxWidth.value
+        val availH = maxHeight.value
+        val places = WidgetStore.places
+
+        val lacking = enabled.filter { places[it] == null }
+        var startY = 96f
+        for (id in enabled) {
+            val p = places[id]
+            if (p != null && p.page == 0) startY = maxOf(startY, p.y + p.h + 12f)
+        }
+        val defaults: Map<String, WPlace> =
+            if (page == 0) defaultPlaces(lacking, availW, startY) else emptyMap()
+
+        val shown = ArrayList<Pair<String, WPlace>>()
+        for (id in enabled) {
+            val st = places[id]
+            if (st != null) {
+                if (minOf(st.page, pageCount) == page) shown.add(Pair(id, st))
+            } else if (page == 0) {
+                val d = defaults[id]
+                if (d != null) shown.add(Pair(id, d))
+            }
+        }
+
+        shown.forEach { entry ->
+            val id = entry.first
+            val place = entry.second
+            key(id) {
+                val sel = WidgetStore.selected.value == id
+                val cur = rememberUpdatedState(place)
+                Box(
+                    Modifier.offset(x = place.x.dp, y = place.y.dp)
+                        .size(width = place.w.dp, height = place.h.dp)
+                ) {
+                    WidgetCard(
+                        Modifier.fillMaxSize()
+                            .then(
+                                if (sel) {
+                                    Modifier.pointerInput(id) {
+                                        detectDragGestures(
+                                            onDragEnd = { WidgetStore.save(ctx) },
+                                            onDragCancel = { WidgetStore.save(ctx) }
+                                        ) { change, drag ->
+                                            change.consume()
+                                            val p = cur.value
+                                            val nx = (p.x + drag.x / density).coerceIn(0f, maxOf(0f, availW - p.w))
+                                            val ny = (p.y + drag.y / density).coerceIn(0f, maxOf(0f, availH - p.h))
+                                            WidgetStore.places[id] = WPlace(p.page, nx, ny, p.w, p.h)
+                                        }
+                                    }
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {
+                                    if (WidgetStore.selected.value != id) openWidgetTarget(ctx, id)
+                                },
+                                onLongClick = {
+                                    for ((k, v) in defaults) {
+                                        if (WidgetStore.places[k] == null) WidgetStore.places[k] = v
+                                    }
+                                    WidgetStore.selected.value = id
+                                    WidgetStore.save(ctx)
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
+                            )
+                    ) {
+                        WidgetBody(
+                            id = id,
+                            data = data,
+                            weather = weather,
+                            battery = battery,
+                            media = media,
+                            notes = notes,
+                            onNotes = onNotes,
+                            onWeatherClick = onWeatherClick
+                        )
+                    }
+                    if (sel) {
+                        Box(
+                            Modifier.fillMaxSize().border(2.dp, Color(0xFF0A84FF), RoundedCornerShape(26.dp))
+                        )
+                        Box(
+                            Modifier.align(Alignment.BottomEnd)
+                                .padding(2.dp)
+                                .size(44.dp)
+                                .pointerInput(id) {
+                                    detectDragGestures(
+                                        onDragEnd = { WidgetStore.save(ctx) },
+                                        onDragCancel = { WidgetStore.save(ctx) }
+                                    ) { change, drag ->
+                                        change.consume()
+                                        val p = cur.value
+                                        val nw = (p.w + drag.x / density).coerceIn(96f, maxOf(96f, availW - p.x))
+                                        val nh = (p.h + drag.y / density).coerceIn(80f, maxOf(80f, availH - p.y))
+                                        WidgetStore.places[id] = WPlace(p.page, p.x, p.y, nw, nh)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF0A84FF)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("\u25E2", color = Color.White, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Chuna hua widget: page badlo / hatao / done
+        val selId = WidgetStore.selected.value
+        val sp = shown.firstOrNull { it.first == selId }?.second
+        if (selId != null && sp != null) {
+            val barY = if (sp.y >= 52f) sp.y - 46f else sp.y + sp.h + 6f
+            val barX = sp.x.coerceIn(6f, maxOf(6f, availW - 300f))
+            val move: (Int) -> Unit = { dir ->
+                val np = (page + dir).coerceIn(0, pageCount)
+                if (np != page) {
+                    WidgetStore.places[selId] = WPlace(np, sp.x, sp.y, sp.w, sp.h)
+                    WidgetStore.save(ctx)
+                    Toast.makeText(
+                        ctx,
+                        if (np == 0) "Today page par bheja" else "Home page " + np + " par bheja",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            Row(
+                Modifier.offset(x = barX.dp, y = barY.dp)
+                    .glass(RoundedCornerShape(22.dp), Color(0x99000000), Color(0xEE1C1C1E))
+                    .padding(horizontal = 6.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                BarPill("\u25C0", Color(0x44FFFFFF)) { move(-1) }
+                Text(
+                    if (page == 0) "Today" else "Page " + page,
+                    color = Color.White,
+                    fontSize = 12.sp
+                )
+                BarPill("\u25B6", Color(0x44FFFFFF)) { move(1) }
+                BarPill("Hatao", Color(0xFFFF453A)) {
+                    WidgetStore.places.remove(selId)
+                    WidgetStore.selected.value = null
+                    WidgetStore.save(ctx)
+                    onRemove(selId)
+                }
+                BarPill("Done", Color(0xFF0A84FF)) {
+                    WidgetStore.selected.value = null
+                }
+            }
+        }
+    }
+}
+
+// Today page: upar title, neeche free-form widgets
+@Composable
+fun TodayPage(
+    selected: List<String>,
+    weather: WeatherNow?,
+    battery: Int,
+    media: MediaWatcher,
+    notes: String,
+    onNotes: (String) -> Unit,
+    editing: Boolean,
+    drag: WidgetDragState,
+    onReorder: (String, Offset) -> Unit,
+    onDoneEdit: () -> Unit,
+    onPick: () -> Unit,
+    onWeatherClick: () -> Unit,
+    onLongPress: () -> Unit,
+    onRemove: (String) -> Unit = {},
+    pageCount: Int = 1
+) {
+    val data = rememberWidgetData()
+    Box(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Today", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text(data.full, color = Color(0xFFB0B0B5), fontSize = 14.sp)
+            }
+            Box(
+                Modifier.clip(RoundedCornerShape(20.dp))
+                    .background(Color(0x55FFFFFF))
+                    .clickable { onPick() }
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text("+ Widget", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        if (selected.isEmpty()) {
+            Text(
+                "Koi widget nahi hai. Upar + Widget dabao.",
+                color = Color(0xFFB0B0B5),
+                fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+        WidgetLayer(
+            page = 0,
+            enabled = selected,
+            weather = weather,
+            battery = battery,
+            media = media,
+            notes = notes,
+            onNotes = onNotes,
+            onWeatherClick = onWeatherClick,
+            onRemove = onRemove,
+            pageCount = pageCount
+        )
+    }
+}
+
+// Purana home strip ab use nahi hota (widgets seedha home pages pe rakhe jaate hain)
+@Composable
+fun HomeWidgets(
+    selected: List<String>,
+    weather: WeatherNow?,
+    battery: Int,
+    media: MediaWatcher,
+    onWeatherClick: () -> Unit,
+    onLongPress: () -> Unit
+) {
 }
 
 @Composable
@@ -205,283 +478,6 @@ fun rememberWidgetData(): WidgetData {
         month = SimpleDateFormat("MMMM", loc).format(date),
         full = SimpleDateFormat("EEEE, d MMMM", loc).format(date)
     )
-}
-
-@Composable
-fun WidgetRow(
-    ids: List<String>,
-    data: WidgetData,
-    weather: WeatherNow?,
-    battery: Int,
-    media: MediaWatcher,
-    notes: String,
-    onNotes: (String) -> Unit,
-    onWeatherClick: () -> Unit,
-    editing: Boolean = false,
-    drag: WidgetDragState? = null,
-    onLongPress: () -> Unit = {}
-) {
-    val ctx = LocalContext.current
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        ids.forEach { id ->
-            DisposableEffect(id, editing) {
-                onDispose { drag?.bounds?.remove(id) }
-            }
-            WidgetCard(
-                Modifier.weight(1f)
-                    .height(widgetHeight(id))
-                    .graphicsLayer { alpha = if (drag != null && drag.key == id) 0.3f else 1f }
-                    .onGloballyPositioned {
-                        if (editing && drag != null) drag.bounds[id] = it.boundsInWindow()
-                    }
-            ) {
-                // Tap = us widget ka app khule, long-press = home menu (edit mode me kuch nahi)
-                Box(
-                    Modifier.fillMaxSize().then(
-                        if (!editing) {
-                            Modifier.combinedClickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { openWidgetTarget(ctx, id) },
-                                onLongClick = onLongPress
-                            )
-                        } else {
-                            Modifier
-                        }
-                    )
-                ) {
-                    WidgetBody(
-                        id = id,
-                        data = data,
-                        weather = weather,
-                        battery = battery,
-                        media = media,
-                        notes = notes,
-                        onNotes = onNotes,
-                        onWeatherClick = onWeatherClick
-                    )
-                    if (editing && canResize(id)) {
-                        Box(
-                            Modifier.align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xDD0A84FF))
-                                .clickable { WidgetSizes.cycle(ctx, id) }
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
-                        ) {
-                            Text(sizeLabel(id), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-        if (ids.size == 1 && !isFullRow(ids[0])) {
-            Spacer(Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
-fun HomeWidgets(
-    selected: List<String>,
-    weather: WeatherNow?,
-    battery: Int,
-    media: MediaWatcher,
-    onWeatherClick: () -> Unit,
-    onLongPress: () -> Unit
-) {
-    val ctx = LocalContext.current
-    remember { WidgetSizes.ensureLoaded(ctx) }
-    val data = rememberWidgetData()
-    // Home pe saare chhote aur bade widgets (Calendar / Notes / bahut bade sirf Today page pe)
-    val ids = selected.filter { widgetSize(it) < 2 }
-    BoxWithConstraints(Modifier.fillMaxWidth().height(180.dp)) {
-        val full = maxWidth
-        val half = (maxWidth - 14.dp) / 2
-        if (ids.isEmpty()) {
-            Box(
-                Modifier.fillMaxSize().combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {},
-                    onLongClick = onLongPress
-                ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "Home ke liye Chhota ya Bada widget chuno (Calendar / Notes sirf Today page pe)",
-                    color = Color(0xFFB0B0B5),
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-        } else {
-            Row(
-                Modifier.fillMaxHeight().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                ids.forEach { id ->
-                    WidgetCard(
-                        Modifier.width(if (widgetSize(id) == 0) half else full).height(widgetHeight(id))
-                    ) {
-                        Box(
-                            Modifier.fillMaxSize().combinedClickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { openWidgetTarget(ctx, id) },
-                                onLongClick = onLongPress
-                            )
-                        ) {
-                            WidgetBody(
-                                id = id,
-                                data = data,
-                                weather = weather,
-                                battery = battery,
-                                media = media,
-                                notes = "",
-                                onNotes = {},
-                                onWeatherClick = onWeatherClick
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun TodayPage(
-    selected: List<String>,
-    weather: WeatherNow?,
-    battery: Int,
-    media: MediaWatcher,
-    notes: String,
-    onNotes: (String) -> Unit,
-    editing: Boolean,
-    drag: WidgetDragState,
-    onReorder: (String, Offset) -> Unit,
-    onDoneEdit: () -> Unit,
-    onPick: () -> Unit,
-    onWeatherClick: () -> Unit,
-    onLongPress: () -> Unit
-) {
-    val todayCtx = LocalContext.current
-    remember { WidgetSizes.ensureLoaded(todayCtx) }
-    val data = rememberWidgetData()
-    val origin = remember { FloatArray(2) }
-    val reorderRef = rememberUpdatedState(onReorder)
-    val rows = widgetRows(selected)
-
-    Box(
-        Modifier.fillMaxSize()
-            .onGloballyPositioned {
-                val p = it.positionInWindow()
-                origin[0] = p.x
-                origin[1] = p.y
-            }
-            .pointerInput(editing) {
-                if (editing) {
-                    dragGestures(
-                        findKey = { p ->
-                            val w = Offset(p.x + origin[0], p.y + origin[1])
-                            var hit: String? = null
-                            for (entry in drag.bounds.entries) {
-                                if (entry.value.contains(w)) {
-                                    hit = entry.key
-                                    break
-                                }
-                            }
-                            hit
-                        },
-                        onStart = { k, p ->
-                            drag.pos = Offset(p.x + origin[0], p.y + origin[1])
-                            drag.key = k
-                        },
-                        onMove = { p -> drag.pos = Offset(p.x + origin[0], p.y + origin[1]) },
-                        onEnd = {
-                            val k = drag.key
-                            drag.key = null
-                            if (k != null) reorderRef.value(k, drag.pos)
-                        }
-                    )
-                }
-            }
-    ) {
-        Column(
-            Modifier.fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {},
-                    onLongClick = onLongPress
-                )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Today", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    Text(data.full, color = Color(0xFFB0B0B5), fontSize = 14.sp)
-                }
-                if (editing) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(
-                            Modifier.clip(RoundedCornerShape(20.dp))
-                                .background(Color(0x55FFFFFF))
-                                .clickable { onPick() }
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            Text("+ Widgets", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Box(
-                            Modifier.clip(RoundedCornerShape(20.dp))
-                                .background(Color(0xFF0A84FF))
-                                .clickable { onDoneEdit() }
-                                .padding(horizontal = 22.dp, vertical = 8.dp)
-                        ) {
-                            Text("Done", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-            if (editing) {
-                Text(
-                    "Widget ko pakad ke dusre ke upar chhodo = jagah badlo. Upar-right ke neele button se size badlo (Chhota / Bada / Bahut bada). Home pe Chhota aur Bada dikhte hain.",
-                    color = Color(0xFFB0B0B5),
-                    fontSize = 12.sp
-                )
-            }
-            if (rows.isEmpty()) {
-                Text(
-                    "Koi widget nahi hai. Yahan long-press karke Widgets chuno.",
-                    color = Color(0xFFB0B0B5),
-                    fontSize = 14.sp
-                )
-            }
-            rows.forEach { rowIds ->
-                WidgetRow(rowIds, data, weather, battery, media, notes, onNotes, onWeatherClick, editing, drag, onLongPress)
-            }
-        }
-        val k = drag.key
-        if (k != null) {
-            val label = WIDGET_CATALOG.firstOrNull { it.first == k }?.second ?: k
-            Box(
-                Modifier
-                    .offset {
-                        IntOffset(
-                            (drag.pos.x - origin[0]).roundToInt() - 90,
-                            (drag.pos.y - origin[1]).roundToInt() - 26
-                        )
-                    }
-                    .glass(RoundedCornerShape(20.dp), Color(0x80000000), Color(0xCC2C2C2E))
-                    .padding(horizontal = 18.dp, vertical = 12.dp)
-            ) {
-                Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
 }
 
 @Composable
@@ -716,7 +712,7 @@ fun openWidgetTarget(context: Context, id: String) {
             "storage" -> Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
             "memory" -> Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
             "screentime" ->
-                if (hasUsageAccess(context)) Intent(Settings.ACTION_SETTINGS)
+                if (hasUsageAccess(context)) null
                 else Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
             else -> null
         }
