@@ -311,7 +311,7 @@ fun MenuItem(text: String, onClick: () -> Unit) {
 class MenuEntry(val label: String, val keepOpen: Boolean = false, val action: () -> Unit)
 
 @Composable
-fun HomeMenuDialog(sections: List<Pair<String, List<MenuEntry>>>, onDismiss: () -> Unit) {
+fun HomeMenuDialogOld(sections: List<Pair<String, List<MenuEntry>>>, onDismiss: () -> Unit) {
     var open by remember { mutableStateOf(-1) }
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -348,7 +348,7 @@ fun HomeMenuDialog(sections: List<Pair<String, List<MenuEntry>>>, onDismiss: () 
 }
 
 @Composable
-fun HideManagerDialog(
+fun HideManagerDialogOld(
     apps: List<AppItem>,
     hidden: List<String>,
     onToggle: (String) -> Unit,
@@ -628,7 +628,7 @@ fun AppActionDialog(
 }
 
 @Composable
-fun SearchOverlay(apps: List<AppItem>, cols: Int, onClose: () -> Unit, onLaunch: (AppItem) -> Unit) {
+fun SearchOverlayOld(apps: List<AppItem>, cols: Int, onClose: () -> Unit, onLaunch: (AppItem) -> Unit) {
     var query by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     BackHandler(enabled = true) { onClose() }
